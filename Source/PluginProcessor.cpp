@@ -41,6 +41,10 @@ namespace axsynth
         pLfoAmount   = apvts.getRawParameterValue (params::lfoAmount);
         pCutoff      = apvts.getRawParameterValue (params::cutoff);
         pResonance   = apvts.getRawParameterValue (params::resonance);
+        pTone        = apvts.getRawParameterValue (params::tone);
+        pUnison      = apvts.getRawParameterValue (params::unison);
+        pDetune      = apvts.getRawParameterValue (params::detune);
+        pSub         = apvts.getRawParameterValue (params::sub);
         pAttack      = apvts.getRawParameterValue (params::attack);
         pDecay       = apvts.getRawParameterValue (params::decay);
         pSustain     = apvts.getRawParameterValue (params::sustain);
@@ -75,6 +79,8 @@ namespace axsynth
         sGain.reset (sr, smoothSec);      sGain.setCurrentAndTargetValue (dbToGain (readParam (pOutput, params::outputMinDb, params::outputMaxDb, 0.0f)));
         sCutoff.reset (sr, smoothSec);    sCutoff.setCurrentAndTargetValue (readParam (pCutoff, 20.0f, 20000.0f, 8000.0f));
         sModWheel.reset (sr, smoothSec);  sModWheel.setCurrentAndTargetValue (0.0f);
+        sSub.reset (sr, smoothSec);       sSub.setCurrentAndTargetValue (readParam (pSub, 0.0f, 1.0f, 0.0f));
+        sDetune.reset (sr, smoothSec);    sDetune.setCurrentAndTargetValue (readParam (pDetune, 0.0f, 50.0f, 12.0f));
 
         lfoPhase = 0.0;
         pitchBend = 0.0f;
@@ -119,6 +125,10 @@ namespace axsynth
         sResonance.setTargetValue (readParam (pResonance, 0.0f, 1.0f, 0.1f));
         sCutoff.setTargetValue (readParam (pCutoff, 20.0f, 20000.0f, 8000.0f));
         sGain.setTargetValue (dbToGain (readParam (pOutput, params::outputMinDb, params::outputMaxDb, 0.0f)));
+        sSub.setTargetValue (readParam (pSub, 0.0f, 1.0f, 0.0f));
+        sDetune.setTargetValue (readParam (pDetune, 0.0f, 50.0f, 12.0f));
+        controls.unison = juce::jlimit (1, BlockControls::maxUnison, juce::roundToInt (readParam (pUnison, 1.0f, 7.0f, 3.0f)));
+        engine.setTilt (readParam (pTone, 0.5f, 2.5f, 1.2f));  // one relaxed atomic store
         envelope.attackSec  = readParam (pAttack, 0.001f, 5.0f, 0.010f);
         envelope.decaySec   = readParam (pDecay, 0.005f, 10.0f, 0.300f);
         envelope.sustain    = readParam (pSustain, 0.0f, 1.0f, 1.0f);
@@ -210,24 +220,38 @@ namespace axsynth
             controls.filterG[i] = (float) std::tan (juce::MathConstants<double>::pi * fc / sampleRate);
             const float q = 0.707f * std::pow (30.0f, sResonance.getNextValue());
             controls.filterK[i] = 1.0f / q;
+            controls.subLevel[i] = sSub.getNextValue();
         }
+        sDetune.skip (n - 1);
+        controls.detuneCents = sDetune.getNextValue();
         effectivePosition.store (posEff, std::memory_order_relaxed);
 
-        float mono[BlockControls::maxSamples];
-        synth.render (mono, n, controls, reader, pitchBend * 2.0f);
+        float left[BlockControls::maxSamples], right[BlockControls::maxSamples];
+        synth.render (left, right, n, controls, reader, pitchBend * 2.0f);
         reader.advance (n);
 
         float peak = outputPeak.load (std::memory_order_relaxed);
         for (int i = 0; i < n; ++i)
         {
-            const float s = softClip (mono[i] * sGain.getNextValue());
-            mono[i] = s;
-            peak = juce::jmax (peak, std::abs (s));
+            const float g = sGain.getNextValue();
+            left[i]  = softClip (left[i] * g);
+            right[i] = softClip (right[i] * g);
+            peak = juce::jmax (peak, std::abs (left[i]), std::abs (right[i]));
         }
         outputPeak.store (peak, std::memory_order_relaxed);
 
-        for (int c = 0; c < numChannels; ++c)
-            std::copy (mono, mono + n, channels[c] + offset);
+        if (numChannels >= 2)
+        {
+            std::copy (left, left + n, channels[0] + offset);
+            std::copy (right, right + n, channels[1] + offset);
+            for (int c = 2; c < numChannels; ++c)
+                std::fill (channels[c] + offset, channels[c] + offset + n, 0.0f);
+        }
+        else if (numChannels == 1)
+        {
+            for (int i = 0; i < n; ++i)
+                channels[0][offset + i] = 0.5f * (left[i] + right[i]);
+        }
     }
 
     // ---- state --------------------------------------------------------------

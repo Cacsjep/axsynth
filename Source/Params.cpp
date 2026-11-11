@@ -50,6 +50,24 @@ namespace axsynth::params
             A().withStringFromValueFunction ([] (float v, int) { return juce::String (juce::roundToInt (v * 31.0f) + 1) + " / 32"; })
                .withValueFromStringFunction ([] (const juce::String& s) { return (s.getFloatValue() - 1.0f) / 31.0f; })));
 
+        // Tone = harmonic tilt: 0.5 bright/buzzy ... 2.5 dark/round. 1.0 is sawtooth-like.
+        layout.add (std::make_unique<P> (juce::ParameterID { tone, 1 }, "Tone",
+            juce::NormalisableRange<float> (0.5f, 2.5f), 1.2f,
+            A().withStringFromValueFunction ([] (float v, int) { return juce::String (v, 2); })
+               .withValueFromStringFunction ([] (const juce::String& s) { return s.getFloatValue(); })));
+
+        layout.add (std::make_unique<juce::AudioParameterInt> (juce::ParameterID { unison, 1 }, "Unison", 1, 7, 3,
+            juce::AudioParameterIntAttributes().withStringFromValueFunction ([] (int v, int) { return juce::String (v) + "x"; })
+                                               .withValueFromStringFunction ([] (const juce::String& s) { return s.getIntValue(); })));
+
+        layout.add (std::make_unique<P> (juce::ParameterID { detune, 1 }, "Detune",
+            juce::NormalisableRange<float> (0.0f, 50.0f), 12.0f,
+            A().withStringFromValueFunction ([] (float v, int) { return juce::String (juce::roundToInt (v)) + " ct"; })
+               .withValueFromStringFunction ([] (const juce::String& s) { return s.getFloatValue(); })));
+
+        layout.add (std::make_unique<P> (juce::ParameterID { sub, 1 }, "Sub",
+            juce::NormalisableRange<float> (0.0f, 1.0f), 0.0f, pct));
+
         auto rateRange = logRange (0.05f, 20.0f);
         layout.add (std::make_unique<P> (juce::ParameterID { lfoRate, 1 }, "LFO Rate", rateRange, 0.5f,
             A().withStringFromValueFunction ([] (float v, int) { return formatHz (v); })

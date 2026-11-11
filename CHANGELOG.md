@@ -4,6 +4,18 @@ All notable changes to AxSynth are documented here. The format follows [Keep a C
 
 ## [Unreleased]
 
+## [1.2.0]
+
+### Added
+
+- Tone: sets how fast the harmonics fall off (0.5 bright to 2.5 dark). The default 1.2 gives a fuller, rounder sound than before (fixed at 0.7 in earlier versions).
+- Unison: 1 to 7 detuned oscillators per voice, spread across the stereo field (default 3), with a Detune control (0 to 50 cents, default 12).
+- Sub: sine oscillator one octave below the note, mixed before the filter.
+
+### Changed
+
+- Output is now stereo (unison spread). A mono track gets the mono sum.
+
 ## [1.1.0]
 
 ### Changed

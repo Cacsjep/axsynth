@@ -25,6 +25,9 @@ namespace axsynth
         juce::Rectangle<float> getRect() const;
         static juce::Rectangle<float> defaultRect() { return { 0.2f, 0.2f, 0.6f, 0.6f }; }
 
+        // Harmonic tilt: amp_k = lum * (1/k)^tilt. Any thread; re-weights the last image.
+        void setTilt (float t) noexcept { tilt.store (t, std::memory_order_relaxed); }
+
         // UI accessors (message thread).
         juce::Image getDisplayImage() const;
         void getDisplayFrames (DisplayFrames& out) const;
@@ -56,6 +59,8 @@ namespace axsynth
         mutable juce::SpinLock rectLock;
         juce::Rectangle<float> rect { 0.2f, 0.2f, 0.6f, 0.6f };
         std::atomic<juce::uint32> rectVersion { 1 };
+        std::atomic<float> tilt { builder::defaultTilt };
+        float lastTilt = builder::defaultTilt;
 
         mutable juce::SpinLock displayLock;
         juce::Image displayImage;

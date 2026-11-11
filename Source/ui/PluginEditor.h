@@ -52,7 +52,7 @@ namespace axsynth
         GearButton gear;
         LevelMeter meter;
 
-        Knob position, lfoRate, lfoAmount, cutoff, resonance, output, attack, decay, sustain, release;
+        Knob position, tone, lfoRate, lfoAmount, unison, detune, sub, cutoff, resonance, output, attack, decay, sustain, release;
 
         double lastRefreshMs = 0.0;
         bool closeSetupOnImage = false;

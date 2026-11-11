@@ -84,6 +84,11 @@ int main()
     // Exercise LFO and filter modulation too.
     proc.getState().getParameter (axsynth::params::lfoAmount)->setValueNotifyingHost (0.6f);
     proc.getState().getParameter (axsynth::params::lfoRate)->setValueNotifyingHost (0.9f);
+    // Heaviest voice path: 7 unison oscillators, wide detune, sub on.
+    proc.getState().getParameter (axsynth::params::unison)->setValueNotifyingHost (1.0f);
+    proc.getState().getParameter (axsynth::params::detune)->setValueNotifyingHost (0.8f);
+    proc.getState().getParameter (axsynth::params::sub)->setValueNotifyingHost (0.5f);
+    proc.getState().getParameter (axsynth::params::tone)->setValueNotifyingHost (0.3f);
 
     MockPlayHead playHead;
     proc.setPlayHead (&playHead);

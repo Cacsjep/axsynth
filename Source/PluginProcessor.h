@@ -67,13 +67,17 @@ namespace axsynth
         std::atomic<float>* pLfoAmount {};
         std::atomic<float>* pCutoff {};
         std::atomic<float>* pResonance {};
+        std::atomic<float>* pTone {};
+        std::atomic<float>* pUnison {};
+        std::atomic<float>* pDetune {};
+        std::atomic<float>* pSub {};
         std::atomic<float>* pAttack {};
         std::atomic<float>* pDecay {};
         std::atomic<float>* pSustain {};
         std::atomic<float>* pRelease {};
         std::atomic<float>* pOutput {};
 
-        juce::SmoothedValue<float> sPosition, sLfoAmount, sResonance, sGain, sModWheel;
+        juce::SmoothedValue<float> sPosition, sLfoAmount, sResonance, sGain, sModWheel, sSub, sDetune;
         juce::SmoothedValue<float, juce::ValueSmoothingTypes::Multiplicative> sCutoff;
 
         double sampleRate = 44100.0;

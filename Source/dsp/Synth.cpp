@@ -29,8 +29,16 @@ namespace axsynth
         if (! active)
         {
             env = 0.0f;
-            phase = 0.0;
-            filter.reset();
+            // Unison oscillators start spread out (golden ratio), not in phase: no
+            // flanged attack. Oscillator 0 starts at 0 so a single oscillator is exact.
+            for (int j = 0; j < BlockControls::maxUnison; ++j)
+            {
+                const double p = 0.6180339887 * j;
+                phases[j] = p - std::floor (p);
+            }
+            subPhase = 0.0;
+            filterL.reset();
+            filterR.reset();
         }
         // Stolen or retriggered voices continue from their current level: no click.
         note = n;
@@ -47,7 +55,7 @@ namespace axsynth
             stage = Stage::release;
     }
 
-    void Voice::render (float* out, int n, const BlockControls& ctl,
+    void Voice::render (float* outL, float* outR, int n, const BlockControls& ctl,
                         const Wavetable* cur, const Wavetable* prev, float fade, float fadeStep,
                         float pitchBendSemis) noexcept
     {
@@ -55,8 +63,26 @@ namespace axsynth
             return;
 
         const double freq = 440.0 * std::pow (2.0, ((double) note - 69.0 + (double) pitchBendSemis) / 12.0);
-        const double inc = freq / sampleRate;
-        const int mip = builder::mipForFrequency (freq, sampleRate);
+        const double subInc = 0.5 * freq / sampleRate;
+
+        // Unison: oscillators spread evenly over +-detune and across the stereo field,
+        // equal-power panned, summed at constant loudness (1/sqrt(count)).
+        const int count = juce::jlimit (1, BlockControls::maxUnison, ctl.unison);
+        const double detune = juce::jlimit (0.0, 100.0, (double) ctl.detuneCents);
+        double inc[BlockControls::maxUnison];
+        float gainL[BlockControls::maxUnison], gainR[BlockControls::maxUnison];
+        const float norm = 1.0f / std::sqrt ((float) count);
+        for (int j = 0; j < count; ++j)
+        {
+            const float spread = count == 1 ? 0.0f : 2.0f * (float) j / (float) (count - 1) - 1.0f; // -1..1
+            inc[j] = freq * std::pow (2.0, (double) spread * detune / 1200.0) / sampleRate;
+            const float pan = (spread + 1.0f) * juce::MathConstants<float>::pi * 0.25f;          // 0..pi/2
+            gainL[j] = std::cos (pan) * norm;
+            gainR[j] = std::sin (pan) * norm;
+        }
+        // Mip for the highest oscillator, so no unison copy aliases.
+        const int mip = builder::mipForFrequency (freq * std::pow (2.0, detune / 1200.0), sampleRate);
+        constexpr float subPanGain = 0.70710678f; // centred
 
         for (int i = 0; i < n; ++i)
         {
@@ -85,22 +111,42 @@ namespace axsynth
             const int f1 = juce::jmin (f0 + 1, numFrames - 1);
             const float ff = pos - (float) f0;
 
-            const double idx = phase * tableSize;
-            const int i0 = juce::jlimit (0, tableSize - 1, (int) idx);
-            const float fi = (float) (idx - (double) i0);
+            const float fd = prev != nullptr ? juce::jmin (1.0f, fade + fadeStep * (float) i) : 1.0f;
+            float l = 0.0f, r = 0.0f;
 
-            float s = readTable (*cur, mip, f0, f1, ff, i0, fi);
-            if (prev != nullptr)
+            for (int j = 0; j < count; ++j)
             {
-                const float fd = juce::jmin (1.0f, fade + fadeStep * (float) i);
-                const float sp = readTable (*prev, mip, f0, f1, ff, i0, fi);
-                s = sp + fd * (s - sp);
+                const double idx = phases[j] * tableSize;
+                const int i0 = juce::jlimit (0, tableSize - 1, (int) idx);
+                const float fi = (float) (idx - (double) i0);
+
+                float s = readTable (*cur, mip, f0, f1, ff, i0, fi);
+                if (prev != nullptr)
+                {
+                    const float sp = readTable (*prev, mip, f0, f1, ff, i0, fi);
+                    s = sp + fd * (s - sp);
+                }
+                l += s * gainL[j];
+                r += s * gainR[j];
+
+                phases[j] += inc[j];
+                if (phases[j] >= 1.0) phases[j] -= 1.0;
             }
 
-            phase += inc;
-            if (phase >= 1.0) phase -= 1.0;
+            // Sub oscillator: pure sine one octave down, centred, through the filter too.
+            if (ctl.subLevel[i] > 0.0f)
+            {
+                const float sub = ctl.subLevel[i] * subPanGain
+                                * (float) std::sin (juce::MathConstants<double>::twoPi * subPhase);
+                l += sub;
+                r += sub;
+            }
+            subPhase += subInc;
+            if (subPhase >= 1.0) subPhase -= 1.0;
 
-            out[i] += filter.process (s, ctl.filterG[i], ctl.filterK[i]) * env * velocityGain;
+            const float g = env * velocityGain;
+            outL[i] += filterL.process (l, ctl.filterG[i], ctl.filterK[i]) * g;
+            outR[i] += filterR.process (r, ctl.filterG[i], ctl.filterK[i]) * g;
         }
     }
 
@@ -154,17 +200,24 @@ namespace axsynth
         for (auto& v : voices) v.setEnvelope (e);
     }
 
-    void SynthEngine::render (float* out, int n, const BlockControls& ctl, WavetableReader& reader, float pitchBendSemis) noexcept
+    void SynthEngine::render (float* outL, float* outR, int n, const BlockControls& ctl, WavetableReader& reader, float pitchBendSemis) noexcept
     {
-        float tmp[BlockControls::maxSamples] = {};
+        float tmpL[BlockControls::maxSamples] = {};
+        float tmpR[BlockControls::maxSamples] = {};
         const auto* cur = reader.getCurrent();
         const auto* prev = reader.getPrevious();
 
         for (auto& v : voices)
-            v.render (tmp, n, ctl, cur, prev, reader.getFade(), reader.getFadeStep(), pitchBendSemis);
+            v.render (tmpL, tmpR, n, ctl, cur, prev, reader.getFade(), reader.getFadeStep(), pitchBendSemis);
 
+        // Centre pan gain is 1/sqrt(2); compensate so a single centred oscillator keeps
+        // the same level per channel as before.
+        constexpr float g = voiceGain * 1.41421356f;
         for (int i = 0; i < n; ++i)
-            out[i] = tmp[i] * voiceGain;
+        {
+            outL[i] = tmpL[i] * g;
+            outR[i] = tmpR[i] * g;
+        }
     }
 
     int SynthEngine::getNumActiveVoices() const noexcept

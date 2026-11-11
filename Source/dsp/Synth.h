@@ -9,9 +9,13 @@ namespace axsynth
     struct BlockControls
     {
         static constexpr int maxSamples = 64;
+        static constexpr int maxUnison = 7;
         float position[maxSamples];   // effective wavetable position 0..1
         float filterG[maxSamples];    // TPT SVF g = tan(pi fc / fs)
         float filterK[maxSamples];    // 1 / Q
+        float subLevel[maxSamples];   // sub oscillator (sine, one octave down) 0..1
+        int unison = 1;               // oscillators per voice, 1..maxUnison
+        float detuneCents = 0.0f;     // spread of the outermost unison oscillators (+-)
     };
 
     // ADSR settings. Decay and release times are the time to cover 60 dB of the distance.
@@ -46,11 +50,11 @@ namespace axsynth
     class Voice
     {
     public:
-        void prepare (double sr) noexcept { sampleRate = sr; filter.reset(); }
+        void prepare (double sr) noexcept { sampleRate = sr; filterL.reset(); filterR.reset(); }
 
         void noteOn (int note, float velocity, juce::uint64 order, const Envelope&) noexcept;
         void noteOff() noexcept;
-        void kill() noexcept { active = false; env = 0.0f; stage = Stage::idle; filter.reset(); }
+        void kill() noexcept { active = false; env = 0.0f; stage = Stage::idle; filterL.reset(); filterR.reset(); }
 
         bool isActive() const noexcept { return active; }
         bool isHeld() const noexcept { return active && stage != Stage::release; }
@@ -59,8 +63,8 @@ namespace axsynth
 
         void setEnvelope (const Envelope&) noexcept;
 
-        // Adds into out[0..n). pitchBendSemis applies to all voices.
-        void render (float* out, int n, const BlockControls& ctl,
+        // Adds into outL/outR[0..n). pitchBendSemis applies to all voices.
+        void render (float* outL, float* outR, int n, const BlockControls& ctl,
                      const Wavetable* cur, const Wavetable* prev, float fade, float fadeStep,
                      float pitchBendSemis) noexcept;
 
@@ -68,7 +72,8 @@ namespace axsynth
         enum class Stage { idle, attack, decay, release }; // decay settles into sustain
 
         double sampleRate = 44100.0;
-        double phase = 0.0;
+        double phases[BlockControls::maxUnison] {};
+        double subPhase = 0.0;
         int note = -1;
         float velocityGain = 1.0f;
         juce::uint64 order = 0;
@@ -76,7 +81,7 @@ namespace axsynth
 
         Stage stage = Stage::idle;
         float env = 0.0f, attackStep = 0.01f, decayCoeff = 0.999f, sustainLevel = 1.0f, releaseCoeff = 0.999f;
-        SvfLowpass filter;
+        SvfLowpass filterL, filterR;
     };
 
     // 8-voice polyphonic engine, oldest-voice stealing.
@@ -94,7 +99,7 @@ namespace axsynth
         void allNotesOff() noexcept;
         void setEnvelope (const Envelope&) noexcept;
 
-        void render (float* out, int n, const BlockControls& ctl, WavetableReader& reader, float pitchBendSemis) noexcept;
+        void render (float* outL, float* outR, int n, const BlockControls& ctl, WavetableReader& reader, float pitchBendSemis) noexcept;
 
         int getNumActiveVoices() const noexcept;
 

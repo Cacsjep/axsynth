@@ -7,6 +7,9 @@ using namespace axsynth;
 
 namespace
 {
+    // Right channel sink for voice tests that only look at the left channel.
+    float scratchR[BlockControls::maxSamples];
+
     juce::Image solidImage (int w, int h, juce::Colour c)
     {
         juce::Image img (juce::Image::RGB, w, h, false);
@@ -248,7 +251,7 @@ public:
             // After one 40 ms step exactly 1 - exp(-40/150) of the way (h1 stays at 1).
             const float* f = reader.getCurrent()->frame (0, 10);
             const double ratio1 = harmonicMagnitude (f, 2) / harmonicMagnitude (f, 1);
-            const double fullRatio = std::pow (0.5, 0.7);
+            const double fullRatio = std::pow (0.5, (double) builder::defaultTilt);
             expectWithinAbsoluteError (ratio1 / fullRatio, 1.0 - std::exp (-0.040 / 0.150), 0.01);
 
             for (int i = 0; i < 100; ++i)
@@ -344,7 +347,7 @@ public:
 
             std::vector<float> out (96000, 0.0f);
             for (int i = 0; i < (int) out.size(); i += 64)
-                v.render (out.data() + i, juce::jmin (64, (int) out.size() - i), ctl, table.get(), nullptr, 1.0f, 0.0f, 0.0f);
+                v.render (out.data() + i, scratchR, juce::jmin (64, (int) out.size() - i), ctl, table.get(), nullptr, 1.0f, 0.0f, 0.0f);
 
             auto mag = [&] (double hz)
             {
@@ -383,13 +386,13 @@ public:
                 float pk = 0.0f;
                 std::vector<float> buf ((size_t) samples, 0.0f);
                 for (int i = 0; i < samples; i += 64)
-                    v.render (buf.data() + i, juce::jmin (64, samples - i), flat, table.get(), nullptr, 1.0f, 0.0f, 0.0f);
+                    v.render (buf.data() + i, scratchR, juce::jmin (64, samples - i), flat, table.get(), nullptr, 1.0f, 0.0f, 0.0f);
                 for (auto x : buf) pk = juce::jmax (pk, std::abs (x));
                 return pk;
             };
 
             const float attackPeak = peakOver (960);              // 20 ms: attack done, decay started
-            expectGreaterThan (attackPeak, 0.8f);
+            expectGreaterThan (attackPeak, 0.65f); // centred oscillator: 1/sqrt(2) per channel
             peakOver (48000 - 960);                                // ~1 s: decay settled
             const float sustained = peakOver (4800);
             expectWithinAbsoluteError (sustained / attackPeak, 0.25f, 0.03f);
@@ -405,8 +408,62 @@ public:
             w.noteOn (69, 1.0f, 1, Envelope { 0.001f, 0.05f, 0.0f, 1.0f });
             std::vector<float> buf (48000, 0.0f);
             for (int i = 0; i < 48000; i += 64)
-                w.render (buf.data() + i, 64, flat, table.get(), nullptr, 1.0f, 0.0f, 0.0f);
+                w.render (buf.data() + i, scratchR, 64, flat, table.get(), nullptr, 1.0f, 0.0f, 0.0f);
             expect (! w.isActive(), "sustain 0 voice should end after the decay");
+        }
+
+        beginTest ("Unison: detuned copies spread across stereo; sub adds the octave below");
+        {
+            const double sr = 48000.0;
+            BlockControls c {};
+            for (int i = 0; i < BlockControls::maxSamples; ++i)
+            {
+                c.position[i] = 0.0f;   // frame 0 = pure sine
+                c.filterG[i] = (float) std::tan (juce::MathConstants<double>::pi * 20000.0 / 96000.0);
+                c.filterK[i] = 1.0f / 0.707f;
+            }
+
+            auto run = [&] (int unison, float detune, float sub, std::vector<float>& l, std::vector<float>& r)
+            {
+                c.unison = unison;
+                c.detuneCents = detune;
+                for (auto& x : c.subLevel) x = sub;
+                Voice v;
+                v.prepare (sr);
+                v.noteOn (69, 1.0f, 1, Envelope { 0.001f, 0.3f, 1.0f, 1.0f });
+                l.assign (48000, 0.0f);
+                r.assign (48000, 0.0f);
+                for (int i = 0; i < 48000; i += 64)
+                    v.render (l.data() + i, r.data() + i, 64, c, table.get(), nullptr, 1.0f, 0.0f, 0.0f);
+            };
+            auto toneMag = [&] (const std::vector<float>& x, double hz)
+            {
+                double re = 0, im = 0;
+                for (int n = 24000; n < 48000; ++n)
+                {
+                    const double a = juce::MathConstants<double>::twoPi * hz * n / sr;
+                    re += x[(size_t) n] * std::cos (a); im += x[(size_t) n] * std::sin (a);
+                }
+                return std::sqrt (re * re + im * im) / 12000.0;
+            };
+
+            std::vector<float> l, r;
+            run (1, 0.0f, 0.0f, l, r);
+            double diff = 0.0;
+            for (size_t i = 0; i < l.size(); ++i) diff += std::abs (l[i] - r[i]);
+            expectLessThan (diff, 1.0e-3, "single oscillator is centred");
+            const double single = toneMag (l, 440.0);
+
+            run (3, 20.0f, 0.0f, l, r);
+            diff = 0.0;
+            for (size_t i = 0; i < l.size(); ++i) diff += std::abs (l[i] - r[i]);
+            expectGreaterThan (diff, 100.0, "unison spreads across stereo");
+            const double up = 440.0 * std::pow (2.0, 20.0 / 1200.0), down = 440.0 * std::pow (2.0, -20.0 / 1200.0);
+            expectGreaterThan (toneMag (r, up), toneMag (l, up) * 2.0);     // upper copy panned right
+            expectGreaterThan (toneMag (l, down), toneMag (r, down) * 2.0); // lower copy panned left
+
+            run (1, 0.0f, 1.0f, l, r);
+            expectWithinAbsoluteError (toneMag (l, 220.0) / single, 1.0, 0.05); // sub at full level
         }
 
         beginTest ("8 voices, oldest is stolen");
@@ -424,10 +481,10 @@ public:
             reader.update();
             for (auto& p : ctl.position) p = 0.5f;
             float buf[64];
-            for (int i = 0; i < 2000; ++i) s.render (buf, 64, ctl, reader, 0.0f);
+            for (int i = 0; i < 2000; ++i) s.render (buf, scratchR, 64, ctl, reader, 0.0f);
             expectEquals (s.getNumActiveVoices(), 8);
             s.allNotesOff();
-            for (int i = 0; i < 2000; ++i) s.render (buf, 64, ctl, reader, 0.0f);
+            for (int i = 0; i < 2000; ++i) s.render (buf, scratchR, 64, ctl, reader, 0.0f);
             expectEquals (s.getNumActiveVoices(), 0);
         }
     }

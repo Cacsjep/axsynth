@@ -9,7 +9,7 @@ namespace axsynth
     // Pure image -> wavetable math (spec 3.1 - 3.3). No threads, no state besides scratch buffers.
     namespace builder
     {
-        inline constexpr float defaultTilt = 0.7f;
+        inline constexpr float defaultTilt = 1.2f; // matches the Tone default
         inline constexpr float minFundamental = 0.05f;
 
         // x position (in pixels) of scanline i inside a rect starting at x0 with width w.

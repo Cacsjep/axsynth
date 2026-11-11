@@ -108,10 +108,15 @@ namespace axsynth
             newInput = true;
         lastRectVersion = rv;
 
+        const float t = tilt.load (std::memory_order_relaxed);
+        if (std::abs (t - lastTilt) > 1.0e-4f && lastImage.isValid())
+            newInput = true;
+        lastTilt = t;
+
         if (newInput && lastImage.isValid())
         {
             builder::extractLuminance (lastImage, getRect(), lum);
-            builder::weightHarmonics (lum, target);
+            builder::weightHarmonics (lum, target, t);
             hasTarget = true;
             converged = false;
         }

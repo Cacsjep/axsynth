@@ -9,7 +9,7 @@ namespace axsynth
         const juce::Rectangle<int> stack  { 608, 46, 376, 178 };
         const juce::Rectangle<int> gear   { 962, 14, 20, 20 };
         constexpr int columns[] { 655, 749, 843, 937 };
-        constexpr int rows[]    { 298, 416, 534 };
+        constexpr int rows[]    { 280, 374, 468, 562 };
         constexpr int meterW = 6, meterH = 58;
     }
 
@@ -47,8 +47,12 @@ namespace axsynth
           setupPanel (p),
           stack (p.getEngine()),
           position  (p.getState(), params::position,  "Position"),
+          tone      (p.getState(), params::tone,      "Tone"),
           lfoRate   (p.getState(), params::lfoRate,   "LFO Rate"),
           lfoAmount (p.getState(), params::lfoAmount, "LFO Amount"),
+          unison    (p.getState(), params::unison,    "Unison"),
+          detune    (p.getState(), params::detune,    "Detune"),
+          sub       (p.getState(), params::sub,       "Sub"),
           cutoff    (p.getState(), params::cutoff,    "Cutoff"),
           resonance (p.getState(), params::resonance, "Resonance"),
           output    (p.getState(), params::output,    "Output"),
@@ -66,7 +70,8 @@ namespace axsynth
         content.addAndMakeVisible (stack);
         content.addAndMakeVisible (gear);
         content.addAndMakeVisible (meter);
-        for (auto* k : { &position, &lfoRate, &lfoAmount, &cutoff, &resonance, &output, &attack, &decay, &sustain, &release })
+        for (auto* k : { &position, &tone, &lfoRate, &lfoAmount, &unison, &detune, &sub,
+                         &cutoff, &resonance, &output, &attack, &decay, &sustain, &release })
             content.addAndMakeVisible (k);
 
         lfoRate.getSlider().onRightClick = [this] { toggleLfoSync(); };
@@ -120,19 +125,20 @@ namespace axsynth
         stack.setBounds (layout::stack);
         gear.setBounds (layout::gear);
 
-        // Oscillator / LFO, filter / output (+ level meter), envelope.
-        Knob* grid[3][4] { { &position, &lfoRate, &lfoAmount, nullptr },
+        // Wavetable / LFO, voice, filter / output (+ level meter), envelope.
+        Knob* grid[4][4] { { &position, &tone, &lfoRate, &lfoAmount },
+                           { &unison, &detune, &sub, nullptr },
                            { &cutoff, &resonance, &output, nullptr },
                            { &attack, &decay, &sustain, &release } };
 
-        for (int r = 0; r < 3; ++r)
+        for (int r = 0; r < 4; ++r)
             for (int c = 0; c < 4; ++c)
                 if (auto* k = grid[r][c])
                     k->setBounds (layout::columns[c] - Knob::width / 2, layout::rows[r] - Knob::knobSize / 2,
                                   Knob::width, Knob::height);
 
         meter.setBounds (juce::Rectangle<int> (layout::meterW, layout::meterH)
-                             .withCentre ({ layout::columns[3], layout::rows[1] }));
+                             .withCentre ({ layout::columns[3], layout::rows[2] }));
     }
 
     void AxSynthEditor::resized()
