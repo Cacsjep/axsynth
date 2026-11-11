@@ -56,6 +56,16 @@ namespace axsynth::params
             A().withStringFromValueFunction ([] (float v, int) { return juce::String (v, 2); })
                .withValueFromStringFunction ([] (const juce::String& s) { return s.getFloatValue(); })));
 
+        layout.add (std::make_unique<P> (juce::ParameterID { contrast, 1 }, "Contrast",
+            juce::NormalisableRange<float> (0.0f, 1.0f), 0.6f, pct));
+
+        layout.add (std::make_unique<juce::AudioParameterInt> (juce::ParameterID { lines, 1 }, "Lines", 1, 4, 1,
+            juce::AudioParameterIntAttributes().withStringFromValueFunction ([] (int v, int) { return juce::String (v); })
+                                               .withValueFromStringFunction ([] (const juce::String& s) { return s.getIntValue(); })));
+
+        layout.add (std::make_unique<P> (juce::ParameterID { spread, 1 }, "Spread",
+            juce::NormalisableRange<float> (0.0f, 1.0f), 0.25f, pct));
+
         layout.add (std::make_unique<juce::AudioParameterInt> (juce::ParameterID { unison, 1 }, "Unison", 1, 7, 3,
             juce::AudioParameterIntAttributes().withStringFromValueFunction ([] (int v, int) { return juce::String (v) + "x"; })
                                                .withValueFromStringFunction ([] (const juce::String& s) { return s.getIntValue(); })));
@@ -91,6 +101,9 @@ namespace axsynth::params
 
         layout.add (std::make_unique<P> (juce::ParameterID { resonance, 1 }, "Resonance",
             juce::NormalisableRange<float> (0.0f, 1.0f), 0.1f, pct));
+
+        layout.add (std::make_unique<P> (juce::ParameterID { filterEnv, 1 }, "Filter Env",
+            juce::NormalisableRange<float> (0.0f, 1.0f), 0.0f, pct));
 
         auto timeAttrs = A().withStringFromValueFunction ([] (float v, int) { return formatTime (v); })
                             .withValueFromStringFunction ([] (const juce::String& s)

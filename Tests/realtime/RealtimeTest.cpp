@@ -89,6 +89,10 @@ int main()
     proc.getState().getParameter (axsynth::params::detune)->setValueNotifyingHost (0.8f);
     proc.getState().getParameter (axsynth::params::sub)->setValueNotifyingHost (0.5f);
     proc.getState().getParameter (axsynth::params::tone)->setValueNotifyingHost (0.3f);
+    proc.getState().getParameter (axsynth::params::lines)->setValueNotifyingHost (1.0f);
+    proc.getState().getParameter (axsynth::params::spread)->setValueNotifyingHost (0.5f);
+    proc.getState().getParameter (axsynth::params::filterEnv)->setValueNotifyingHost (0.6f);
+    proc.getState().getParameter (axsynth::params::contrast)->setValueNotifyingHost (0.9f);
 
     MockPlayHead playHead;
     proc.setPlayHead (&playHead);

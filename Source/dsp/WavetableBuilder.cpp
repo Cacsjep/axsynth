@@ -35,8 +35,6 @@ namespace axsynth::builder
         normRect = normRect.getIntersection ({ 0.0f, 0.0f, 1.0f, 1.0f });
         const float x0 = normRect.getX() * iw, w = normRect.getWidth() * iw;
         const float y0 = normRect.getY() * ih, h = normRect.getHeight() * ih;
-        const float secH = h / (float) numHarmonics;
-        const int samplesPerSection = juce::jmax (1, (int) std::ceil (secH));
 
         for (int i = 0; i < numFrames; ++i)
         {
@@ -44,14 +42,35 @@ namespace axsynth::builder
 
             for (int s = 0; s < numHarmonics; ++s)
             {
-                const float ya = y0 + (float) s * secH;
+                const float ya = y0 + bandEdge (s) * h;
+                const float bandH = (bandEdge (s + 1) - bandEdge (s)) * h;
+                const int samples = juce::jlimit (1, 64, (int) std::ceil (bandH));
                 float sum = 0.0f;
-                for (int k = 0; k < samplesPerSection; ++k)
-                    sum += sampleLuma (bd, x, ya + ((float) k + 0.5f) * secH / (float) samplesPerSection);
+                for (int k = 0; k < samples; ++k)
+                    sum += sampleLuma (bd, x, ya + ((float) k + 0.5f) * bandH / (float) samples);
 
-                lumOut[(size_t) i][(size_t) s] = juce::jlimit (0.0f, 1.0f, sum / (float) samplesPerSection);
+                lumOut[(size_t) i][(size_t) s] = juce::jlimit (0.0f, 1.0f, sum / (float) samples);
             }
         }
+    }
+
+    void stretchContrast (const HarmonicMatrix& lum, HarmonicMatrix& out, float amount)
+    {
+        amount = juce::jlimit (0.0f, 1.0f, amount);
+        float lo = 1.0f, hi = 0.0f;
+        for (auto& f : lum)
+            for (auto v : f) { lo = juce::jmin (lo, v); hi = juce::jmax (hi, v); }
+
+        constexpr float minRange = 0.15f; // at most ~6.7x gain
+        const float range = juce::jmax (hi - lo, minRange);
+
+        for (size_t f = 0; f < lum.size(); ++f)
+            for (size_t k = 0; k < lum[f].size(); ++k)
+            {
+                const float raw = lum[f][k];
+                const float stretched = juce::jlimit (0.0f, 1.0f, (raw - lo) / range);
+                out[f][k] = raw + amount * (stretched - raw);
+            }
     }
 
     void weightHarmonics (const HarmonicMatrix& lum, HarmonicMatrix& ampsOut, float tilt)

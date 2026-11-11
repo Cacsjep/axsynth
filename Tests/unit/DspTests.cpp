@@ -88,6 +88,43 @@ public:
                     expectGreaterThan (v, 0.95f);
         }
 
+        beginTest ("Bands are log spaced: top sixth = fundamental, top half = harmonics 1..8");
+        {
+            expectWithinAbsoluteError (builder::bandEdge (0), 0.0f, 1.0e-6f);
+            expectWithinAbsoluteError (builder::bandEdge (1), std::log (2.0f) / std::log (65.0f), 1.0e-6f);
+            expectWithinAbsoluteError (builder::bandEdge (64), 1.0f, 1.0e-6f);
+            expectLessThan (std::abs (builder::bandEdge (8) - 0.526f), 0.01f);
+
+            // White stripe over the top 15 % of the image: only the fundamental band is lit.
+            juce::Image img (juce::Image::RGB, 320, 400, true);
+            {
+                juce::Graphics g (img);
+                g.setColour (juce::Colours::white);
+                g.fillRect (0, 0, 320, 60);
+            }
+            HarmonicMatrix lum {};
+            builder::extractLuminance (img, { 0.0f, 0.0f, 1.0f, 1.0f }, lum);
+            expectGreaterThan (lum[10][0], 0.85f);
+            expectLessThan (lum[10][2], 0.05f);
+            expectLessThan (lum[10][40], 0.05f);
+        }
+
+        beginTest ("Contrast stretch: 0 = raw, 1 = darkest to 0 and brightest to 1, limited gain");
+        {
+            HarmonicMatrix lum {}, out {};
+            for (auto& f : lum) for (size_t k = 0; k < f.size(); ++k) f[k] = 0.4f + 0.2f * (float) (k % 2);
+            builder::stretchContrast (lum, out, 0.0f);
+            expectWithinAbsoluteError (out[3][1], 0.6f, 1.0e-6f);
+            builder::stretchContrast (lum, out, 1.0f);
+            expectWithinAbsoluteError (out[3][0], 0.0f, 1.0e-6f);
+            expectWithinAbsoluteError (out[3][1], 1.0f, 1.0e-6f);
+
+            // Nearly flat (range 0.02 < 0.15): gain is capped, no blow-up to 0/1.
+            for (auto& f : lum) for (size_t k = 0; k < f.size(); ++k) f[k] = 0.5f + 0.02f * (float) (k % 2);
+            builder::stretchContrast (lum, out, 1.0f);
+            expectWithinAbsoluteError (out[3][1], 0.02f / 0.15f, 1.0e-4f);
+        }
+
         beginTest ("Invalid image gives zeros");
         {
             HarmonicMatrix lum;
@@ -464,6 +501,70 @@ public:
 
             run (1, 0.0f, 1.0f, l, r);
             expectWithinAbsoluteError (toneMag (l, 220.0) / single, 1.0, 0.05); // sub at full level
+        }
+
+        beginTest ("Lines: several frames at once, spread across stereo");
+        {
+            const double sr = 48000.0;
+            BlockControls c {};
+            for (int i = 0; i < BlockControls::maxSamples; ++i)
+            {
+                c.position[i] = 0.5f / 31.0f * 2.0f;  // between frames 0 and 2 when spread
+                c.filterG[i] = (float) std::tan (juce::MathConstants<double>::pi * 20000.0 / 96000.0);
+                c.filterK[i] = 1.0f / 0.707f;
+            }
+            c.lines = 2;
+            c.lineSpread = 2.0f / 31.0f;               // lines at frame 0 and frame 2
+
+            Voice v;
+            v.prepare (sr);
+            v.noteOn (45, 1.0f, 1, Envelope { 0.001f, 0.3f, 1.0f, 1.0f });  // 110 Hz
+            std::vector<float> l (48000, 0.0f), r (48000, 0.0f);
+            for (int i = 0; i < 48000; i += 64)
+                v.render (l.data() + i, r.data() + i, 64, c, table.get(), nullptr, 1.0f, 0.0f, 0.0f);
+
+            auto mag = [&] (const std::vector<float>& x, double hz)
+            {
+                double re = 0, im = 0;
+                for (int n = 24000; n < 48000; ++n)
+                {
+                    const double a = juce::MathConstants<double>::twoPi * hz * n / sr;
+                    re += x[(size_t) n] * std::cos (a); im += x[(size_t) n] * std::sin (a);
+                }
+                return std::sqrt (re * re + im * im);
+            };
+            // Frame 0 = harmonic 1 (panned left), frame 2 = harmonic 3 (panned right).
+            expectGreaterThan (mag (l, 110.0), mag (r, 110.0) * 2.0);
+            expectGreaterThan (mag (r, 330.0), mag (l, 330.0) * 2.0);
+            expectLessThan (mag (l, 220.0), mag (l, 110.0) * 0.02);
+        }
+
+        beginTest ("Filter envelope opens the cutoff while the envelope is high");
+        {
+            const double sr = 48000.0;
+            BlockControls c {};
+            for (int i = 0; i < BlockControls::maxSamples; ++i)
+            {
+                c.position[i] = 3.0f / 31.0f;  // frame 3 = harmonic 4 (440 Hz at 110 Hz)
+                c.cutoffHz[i] = 120.0f;
+                c.filterG[i] = (float) std::tan (juce::MathConstants<double>::pi * 120.0 / sr);
+                c.filterK[i] = 1.0f / 0.707f;
+            }
+
+            auto level = [&] (float envAmount)
+            {
+                c.filterEnvAmount = envAmount;
+                Voice v;
+                v.prepare (sr);
+                v.noteOn (45, 1.0f, 1, Envelope { 0.001f, 5.0f, 1.0f, 1.0f });
+                std::vector<float> l (9600, 0.0f), r (9600, 0.0f);
+                for (int i = 0; i < 9600; i += 64)
+                    v.render (l.data() + i, r.data() + i, 64, c, table.get(), nullptr, 1.0f, 0.0f, 0.0f);
+                float pk = 0.0f;
+                for (int i = 4800; i < 9600; ++i) pk = juce::jmax (pk, std::abs (l[(size_t) i]));
+                return pk;
+            };
+            expectGreaterThan (level (1.0f), level (0.0f) * 4.0f); // 120 Hz -> ~3.8 kHz lets 440 Hz through
         }
 
         beginTest ("8 voices, oldest is stolen");

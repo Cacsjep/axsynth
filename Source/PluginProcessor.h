@@ -2,6 +2,7 @@
 
 #include "Params.h"
 #include "dsp/Synth.h"
+#include "Presets.h"
 
 namespace axsynth
 {
@@ -26,10 +27,10 @@ namespace axsynth
         bool isMidiEffect() const override { return false; }
         double getTailLengthSeconds() const override { return 14.0; } // 10 s release reaches -80 dB after ~13.3 s
 
-        int getNumPrograms() override { return 1; }
-        int getCurrentProgram() override { return 0; }
-        void setCurrentProgram (int) override {}
-        const juce::String getProgramName (int) override { return "Default"; }
+        int getNumPrograms() override { return (int) presets::all().size(); }
+        int getCurrentProgram() override { return currentProgram.load(); }
+        void setCurrentProgram (int index) override;
+        const juce::String getProgramName (int index) override;
         void changeProgramName (int, const juce::String&) override {}
 
         void getStateInformation (juce::MemoryBlock&) override;
@@ -68,6 +69,10 @@ namespace axsynth
         std::atomic<float>* pCutoff {};
         std::atomic<float>* pResonance {};
         std::atomic<float>* pTone {};
+        std::atomic<float>* pContrast {};
+        std::atomic<float>* pLines {};
+        std::atomic<float>* pSpread {};
+        std::atomic<float>* pFilterEnv {};
         std::atomic<float>* pUnison {};
         std::atomic<float>* pDetune {};
         std::atomic<float>* pSub {};
@@ -77,7 +82,8 @@ namespace axsynth
         std::atomic<float>* pRelease {};
         std::atomic<float>* pOutput {};
 
-        juce::SmoothedValue<float> sPosition, sLfoAmount, sResonance, sGain, sModWheel, sSub, sDetune;
+        juce::SmoothedValue<float> sPosition, sLfoAmount, sResonance, sGain, sModWheel, sSub, sDetune, sSpread, sFilterEnv;
+        std::atomic<int> currentProgram { 0 };
         juce::SmoothedValue<float, juce::ValueSmoothingTypes::Multiplicative> sCutoff;
 
         double sampleRate = 44100.0;

@@ -18,7 +18,9 @@ Requirements: an Axis camera reachable on the network, with its IP, user and pas
 - [ ] Gear icon, enter IP, user, password, click **Verbinden**: the camera image appears.
 - [ ] Wrong password: a short one-line German error message, no crash, no hang.
 - [ ] Drag a rectangle over the image; the sound follows the image content while notes play.
-- [ ] Position, Tone, LFO, Unison, Detune, Sub, Cutoff, Resonance, Output, Attack, Decay, Sustain, Release respond and can be automated.
+- [ ] Every knob responds and can be automated.
+- [ ] Each preset (Init, Pad, Synth, Pluck, Bass, Keys, Arp, Sweep) loads from the selector and from the DAW preset menu.
+- [ ] Moving a hand anywhere inside the rectangle audibly changes the sound (Contrast at default).
 - [ ] Unison above 1 sounds wide in stereo; Sub adds the octave below.
 - [ ] Click a knob, then use the computer keyboard (typing keyboard, transport keys): FL Studio gets the keys, not the plugin.
 - [ ] Save the project, close FL Studio completely, restart it, open the project.

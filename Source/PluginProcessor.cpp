@@ -42,6 +42,10 @@ namespace axsynth
         pCutoff      = apvts.getRawParameterValue (params::cutoff);
         pResonance   = apvts.getRawParameterValue (params::resonance);
         pTone        = apvts.getRawParameterValue (params::tone);
+        pContrast    = apvts.getRawParameterValue (params::contrast);
+        pLines       = apvts.getRawParameterValue (params::lines);
+        pSpread      = apvts.getRawParameterValue (params::spread);
+        pFilterEnv   = apvts.getRawParameterValue (params::filterEnv);
         pUnison      = apvts.getRawParameterValue (params::unison);
         pDetune      = apvts.getRawParameterValue (params::detune);
         pSub         = apvts.getRawParameterValue (params::sub);
@@ -81,6 +85,8 @@ namespace axsynth
         sModWheel.reset (sr, smoothSec);  sModWheel.setCurrentAndTargetValue (0.0f);
         sSub.reset (sr, smoothSec);       sSub.setCurrentAndTargetValue (readParam (pSub, 0.0f, 1.0f, 0.0f));
         sDetune.reset (sr, smoothSec);    sDetune.setCurrentAndTargetValue (readParam (pDetune, 0.0f, 50.0f, 12.0f));
+        sSpread.reset (sr, smoothSec);    sSpread.setCurrentAndTargetValue (readParam (pSpread, 0.0f, 1.0f, 0.25f));
+        sFilterEnv.reset (sr, smoothSec); sFilterEnv.setCurrentAndTargetValue (readParam (pFilterEnv, 0.0f, 1.0f, 0.0f));
 
         lfoPhase = 0.0;
         pitchBend = 0.0f;
@@ -127,8 +133,12 @@ namespace axsynth
         sGain.setTargetValue (dbToGain (readParam (pOutput, params::outputMinDb, params::outputMaxDb, 0.0f)));
         sSub.setTargetValue (readParam (pSub, 0.0f, 1.0f, 0.0f));
         sDetune.setTargetValue (readParam (pDetune, 0.0f, 50.0f, 12.0f));
+        sSpread.setTargetValue (readParam (pSpread, 0.0f, 1.0f, 0.25f));
+        sFilterEnv.setTargetValue (readParam (pFilterEnv, 0.0f, 1.0f, 0.0f));
         controls.unison = juce::jlimit (1, BlockControls::maxUnison, juce::roundToInt (readParam (pUnison, 1.0f, 7.0f, 3.0f)));
-        engine.setTilt (readParam (pTone, 0.5f, 2.5f, 1.2f));  // one relaxed atomic store
+        controls.lines  = juce::jlimit (1, BlockControls::maxLines, juce::roundToInt (readParam (pLines, 1.0f, 4.0f, 1.0f)));
+        engine.setTilt (readParam (pTone, 0.5f, 2.5f, 1.2f));          // relaxed atomic stores
+        engine.setContrast (readParam (pContrast, 0.0f, 1.0f, 0.6f));
         envelope.attackSec  = readParam (pAttack, 0.001f, 5.0f, 0.010f);
         envelope.decaySec   = readParam (pDecay, 0.005f, 10.0f, 0.300f);
         envelope.sustain    = readParam (pSustain, 0.0f, 1.0f, 1.0f);
@@ -216,7 +226,9 @@ namespace axsynth
             posEff = juce::jlimit (0.0f, 1.0f, sPosition.getNextValue() + sLfoAmount.getNextValue() * lfo + sModWheel.getNextValue());
             controls.position[i] = posEff;
 
-            const float fc = juce::jmin (sCutoff.getNextValue(), nyquistLimit);
+            const float cutoffHz = sCutoff.getNextValue();
+            controls.cutoffHz[i] = cutoffHz;
+            const float fc = juce::jmin (cutoffHz, nyquistLimit);
             controls.filterG[i] = (float) std::tan (juce::MathConstants<double>::pi * fc / sampleRate);
             const float q = 0.707f * std::pow (30.0f, sResonance.getNextValue());
             controls.filterK[i] = 1.0f / q;
@@ -224,6 +236,10 @@ namespace axsynth
         }
         sDetune.skip (n - 1);
         controls.detuneCents = sDetune.getNextValue();
+        sSpread.skip (n - 1);
+        controls.lineSpread = sSpread.getNextValue();
+        sFilterEnv.skip (n - 1);
+        controls.filterEnvAmount = sFilterEnv.getNextValue();
         effectivePosition.store (posEff, std::memory_order_relaxed);
 
         float left[BlockControls::maxSamples], right[BlockControls::maxSamples];
@@ -339,6 +355,20 @@ namespace axsynth
                              || camera.getStatus() == CameraConnector::Status::failed)
                 camera.connect (false);
         }
+    }
+
+    void AxSynthProcessor::setCurrentProgram (int index)
+    {
+        if (! juce::isPositiveAndBelow (index, getNumPrograms()))
+            return;
+        currentProgram = index;
+        presets::apply (apvts, index);
+    }
+
+    const juce::String AxSynthProcessor::getProgramName (int index)
+    {
+        const auto& list = presets::all();
+        return juce::isPositiveAndBelow (index, (int) list.size()) ? juce::String (list[(size_t) index].name) : juce::String();
     }
 
     void AxSynthProcessor::connectCamera (const CameraSettings& s)

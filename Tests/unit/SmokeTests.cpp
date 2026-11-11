@@ -316,6 +316,29 @@ namespace axsynth
                 expect (a.getEngine().getRect() == WavetableEngine::defaultRect());
             }
 
+            beginTest ("Presets: names, apply sets listed values and resets the rest");
+            {
+                AxSynthProcessor proc;
+                expectGreaterThan (proc.getNumPrograms(), 5);
+                juce::StringArray names;
+                for (int i = 0; i < proc.getNumPrograms(); ++i)
+                    names.add (proc.getProgramName (i));
+                for (auto n : { "Init", "Pad", "Synth", "Pluck", "Bass" })
+                    expect (names.contains (n), juce::String ("missing preset ") + n);
+
+                const int pluck = names.indexOf ("Pluck");
+                setParam (proc, params::lfoAmount, 0.9f);     // not listed in Pluck -> back to default
+                proc.setCurrentProgram (pluck);
+                expectEquals (proc.getCurrentProgram(), pluck);
+                auto& s = proc.getState();
+                expectWithinAbsoluteError (s.getRawParameterValue (params::sustain)->load(), 0.0f, 1.0e-4f);
+                expectWithinAbsoluteError (s.getRawParameterValue (params::filterEnv)->load(), 0.7f, 1.0e-3f);
+                expectWithinAbsoluteError (s.getRawParameterValue (params::lfoAmount)->load(), 0.0f, 1.0e-4f);
+
+                proc.setCurrentProgram (names.indexOf ("Init"));
+                expectWithinAbsoluteError (s.getRawParameterValue (params::sustain)->load(), 1.0f, 1.0e-4f);
+            }
+
             runLiveEndToEnd();
 
             beginTest ("Setup: changed identity clears learned connection details");

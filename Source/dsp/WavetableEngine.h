@@ -27,6 +27,8 @@ namespace axsynth
 
         // Harmonic tilt: amp_k = lum * (1/k)^tilt. Any thread; re-weights the last image.
         void setTilt (float t) noexcept { tilt.store (t, std::memory_order_relaxed); }
+        // Contrast stretch amount 0..1 (see builder::stretchContrast). Any thread.
+        void setContrast (float c) noexcept { contrast.store (c, std::memory_order_relaxed); }
 
         // UI accessors (message thread).
         juce::Image getDisplayImage() const;
@@ -61,6 +63,9 @@ namespace axsynth
         std::atomic<juce::uint32> rectVersion { 1 };
         std::atomic<float> tilt { builder::defaultTilt };
         float lastTilt = builder::defaultTilt;
+        std::atomic<float> contrast { 0.0f };
+        float lastContrast = 0.0f;
+        HarmonicMatrix stretched {};
 
         mutable juce::SpinLock displayLock;
         juce::Image displayImage;

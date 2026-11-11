@@ -10,12 +10,17 @@ namespace axsynth
     {
         static constexpr int maxSamples = 64;
         static constexpr int maxUnison = 7;
+        static constexpr int maxLines = 4;
         float position[maxSamples];   // effective wavetable position 0..1
         float filterG[maxSamples];    // TPT SVF g = tan(pi fc / fs)
         float filterK[maxSamples];    // 1 / Q
         float subLevel[maxSamples];   // sub oscillator (sine, one octave down) 0..1
+        float cutoffHz[maxSamples];   // base cutoff, used when the filter envelope is on
         int unison = 1;               // oscillators per voice, 1..maxUnison
         float detuneCents = 0.0f;     // spread of the outermost unison oscillators (+-)
+        int lines = 1;                // wavetable lines (frames) played at once, 1..maxLines
+        float lineSpread = 0.0f;      // distance between the outermost lines, 0..1 of the table
+        float filterEnvAmount = 0.0f; // 0..1: the envelope opens the filter by up to 5 octaves
     };
 
     // ADSR settings. Decay and release times are the time to cover 60 dB of the distance.

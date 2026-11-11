@@ -4,6 +4,19 @@ All notable changes to AxSynth are documented here. The format follows [Keep a C
 
 ## [Unreleased]
 
+## [1.3.0]
+
+### Added
+
+- Presets: Init, Pad, Synth, Pluck, Bass, Keys, Arp, Sweep (selector next to the gear icon and in the DAW preset menu).
+- Lines: play 1 to 4 wavetable lines at once; Spread sets how far apart they are. Lines are spread across the stereo field.
+- Contrast: stretches the brightness range inside the rectangle, so small changes in the scene (a hand, a shadow) change the sound clearly.
+- Filter Env: the envelope opens the filter by up to 5 octaves (plucks, basses).
+
+### Changed
+
+- The rectangle height maps to the harmonics like an EQ (low at the top, high at the bottom, log spaced), so every part of the rectangle is audible. Before, almost all of the sound came from the top few percent.
+
 ## [1.2.0]
 
 ### Added

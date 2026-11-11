@@ -8,7 +8,8 @@ namespace axsynth
         const juce::Rectangle<int> camera { 16, 16, 568, 588 };
         const juce::Rectangle<int> stack  { 608, 46, 376, 178 };
         const juce::Rectangle<int> gear   { 962, 14, 20, 20 };
-        constexpr int columns[] { 655, 749, 843, 937 };
+        const juce::Rectangle<int> preset { 820, 12, 130, 24 };
+        constexpr int columns[] { 646, 721, 796, 871, 946 };
         constexpr int rows[]    { 280, 374, 468, 562 };
         constexpr int meterW = 6, meterH = 58;
     }
@@ -39,6 +40,13 @@ namespace axsynth
         g.fillPath (p);
     }
 
+    void PresetButton::paintButton (juce::Graphics& g, bool highlighted, bool down)
+    {
+        g.setColour (down ? theme::accent : (highlighted ? theme::text : theme::textDim));
+        g.setFont (theme::font (11.0f, true));
+        g.drawText (getButtonText(), getLocalBounds(), juce::Justification::centredRight, true);
+    }
+
     // -------------------------------------------------------------------------
 
     AxSynthEditor::AxSynthEditor (AxSynthProcessor& p)
@@ -47,14 +55,18 @@ namespace axsynth
           setupPanel (p),
           stack (p.getEngine()),
           position  (p.getState(), params::position,  "Position"),
+          lines     (p.getState(), params::lines,     "Lines"),
+          spread    (p.getState(), params::spread,    "Spread"),
           tone      (p.getState(), params::tone,      "Tone"),
-          lfoRate   (p.getState(), params::lfoRate,   "LFO Rate"),
-          lfoAmount (p.getState(), params::lfoAmount, "LFO Amount"),
+          contrast  (p.getState(), params::contrast,  "Contrast"),
           unison    (p.getState(), params::unison,    "Unison"),
           detune    (p.getState(), params::detune,    "Detune"),
           sub       (p.getState(), params::sub,       "Sub"),
+          lfoRate   (p.getState(), params::lfoRate,   "LFO Rate"),
+          lfoAmount (p.getState(), params::lfoAmount, "LFO Amount"),
           cutoff    (p.getState(), params::cutoff,    "Cutoff"),
           resonance (p.getState(), params::resonance, "Resonance"),
+          filterEnv (p.getState(), params::filterEnv, "Flt Env"),
           output    (p.getState(), params::output,    "Output"),
           attack    (p.getState(), params::attack,    "Attack"),
           decay     (p.getState(), params::decay,     "Decay"),
@@ -70,8 +82,8 @@ namespace axsynth
         content.addAndMakeVisible (stack);
         content.addAndMakeVisible (gear);
         content.addAndMakeVisible (meter);
-        for (auto* k : { &position, &tone, &lfoRate, &lfoAmount, &unison, &detune, &sub,
-                         &cutoff, &resonance, &output, &attack, &decay, &sustain, &release })
+        for (auto* k : { &position, &lines, &spread, &tone, &contrast, &unison, &detune, &sub, &lfoRate, &lfoAmount,
+                         &cutoff, &resonance, &filterEnv, &output, &attack, &decay, &sustain, &release })
             content.addAndMakeVisible (k);
 
         lfoRate.getSlider().onRightClick = [this] { toggleLfoSync(); };
@@ -84,6 +96,10 @@ namespace axsynth
         gear.setWantsKeyboardFocus (false);
 
         gear.onClick = [this] { setSetupPanelVisible (! setupPanel.isVisible()); };
+
+        presetButton.setWantsKeyboardFocus (false);
+        presetButton.onClick = [this] { showPresetMenu(); };
+        content.addAndMakeVisible (presetButton);
 
         // Close on the first frame of the new connection, counted at the camera after
         // connect() restarted it, so a frame from the previous stream cannot close it.
@@ -125,20 +141,22 @@ namespace axsynth
         stack.setBounds (layout::stack);
         gear.setBounds (layout::gear);
 
-        // Wavetable / LFO, voice, filter / output (+ level meter), envelope.
-        Knob* grid[4][4] { { &position, &tone, &lfoRate, &lfoAmount },
-                           { &unison, &detune, &sub, nullptr },
-                           { &cutoff, &resonance, &output, nullptr },
-                           { &attack, &decay, &sustain, &release } };
+        // Image -> wavetable, voice + LFO, filter / output (+ level meter), envelope.
+        Knob* grid[4][5] { { &position, &lines, &spread, &tone, &contrast },
+                           { &unison, &detune, &sub, &lfoRate, &lfoAmount },
+                           { &cutoff, &resonance, &filterEnv, &output, nullptr },
+                           { &attack, &decay, &sustain, &release, nullptr } };
+
+        presetButton.setBounds (layout::preset);
 
         for (int r = 0; r < 4; ++r)
-            for (int c = 0; c < 4; ++c)
+            for (int c = 0; c < 5; ++c)
                 if (auto* k = grid[r][c])
                     k->setBounds (layout::columns[c] - Knob::width / 2, layout::rows[r] - Knob::knobSize / 2,
                                   Knob::width, Knob::height);
 
         meter.setBounds (juce::Rectangle<int> (layout::meterW, layout::meterH)
-                             .withCentre ({ layout::columns[3], layout::rows[2] }));
+                             .withCentre ({ layout::columns[4], layout::rows[2] }));
     }
 
     void AxSynthEditor::resized()
@@ -173,6 +191,24 @@ namespace axsynth
         gear.setToggleState (shouldShow, juce::dontSendNotification);
     }
 
+    void AxSynthEditor::showPresetMenu()
+    {
+        juce::PopupMenu menu;
+        const int current = processor.getCurrentProgram();
+        for (int i = 0; i < processor.getNumPrograms(); ++i)
+            menu.addItem (i + 1, processor.getProgramName (i), true, i == current);
+
+        menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&presetButton),
+                            [safe = juce::Component::SafePointer<AxSynthEditor> (this)] (int result)
+                            {
+                                if (safe != nullptr && result > 0)
+                                {
+                                    safe->processor.setCurrentProgram (result - 1);
+                                    safe->refresh();
+                                }
+                            });
+    }
+
     void AxSynthEditor::armCloseOnImage()
     {
         closeSetupOnImage = true;
@@ -200,6 +236,11 @@ namespace axsynth
         cameraView.update (pos);
         stack.update (pos);
         meter.push (processor.takeOutputPeak(), dt);
+
+        const auto presetName = processor.getProgramName (processor.getCurrentProgram()).toUpperCase()
+                              + juce::String (juce::CharPointer_UTF8 (" \xe2\x96\xbe"));
+        if (presetButton.getButtonText() != presetName)
+            presetButton.setButtonText (presetName);
 
         const bool sync = *processor.getState().getRawParameterValue (params::lfoSync) > 0.5f;
         lfoRate.bindTo (sync ? params::lfoRateSync : params::lfoRate);

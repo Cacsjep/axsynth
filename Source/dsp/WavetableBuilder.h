@@ -21,9 +21,22 @@ namespace axsynth
             return (0.299f * p.getRed() + 0.587f * p.getGreen() + 0.114f * p.getBlue()) / 255.0f;
         }
 
-        // Mean luminance of 64 equal sections along each of the 32 scanlines.
-        // normRect is in 0..1 image coordinates. Section 0 = top.
+        // Top edge (0..1 of the rect height) of the band that drives harmonic k (0-based).
+        // Log spaced like an EQ: the top sixth drives the fundamental, the top half
+        // harmonics 1..8, the bottom half 9..64, so every part of the rect is audible.
+        inline float bandEdge (int k) noexcept
+        {
+            return std::log ((float) k + 1.0f) / std::log ((float) numHarmonics + 1.0f);
+        }
+
+        // Mean luminance of the 64 bands along each of the 32 scanlines.
+        // normRect is in 0..1 image coordinates. Band 0 (fundamental) = top.
         void extractLuminance (const juce::Image& image, juce::Rectangle<float> normRect, HarmonicMatrix& lumOut);
+
+        // Auto levels over the whole rect: amount 0 = raw luminance, 1 = darkest -> 0 and
+        // brightest -> 1, so small changes (a hand, a shadow) change the sound a lot.
+        // The stretch is limited so a flat, noisy wall is not blown up to random spectra.
+        void stretchContrast (const HarmonicMatrix& lum, HarmonicMatrix& out, float amount);
 
         // amp_k = lum[k-1] * (1/k)^tilt, plus guaranteed minimum fundamental.
         void weightHarmonics (const HarmonicMatrix& lum, HarmonicMatrix& ampsOut, float tilt = defaultTilt);

@@ -18,6 +18,14 @@ namespace axsynth
         void paintButton (juce::Graphics&, bool highlighted, bool down) override;
     };
 
+    // Preset name as flat caps text (no box), opens the preset menu.
+    class PresetButton : public juce::Button
+    {
+    public:
+        PresetButton() : juce::Button ("preset") {}
+        void paintButton (juce::Graphics&, bool highlighted, bool down) override;
+    };
+
     // Plugin UI (spec section 6). Everything is laid out at 1000 x 620 inside 'content'
     // and scaled uniformly with the window (fixed aspect ratio).
     class AxSynthEditor : public juce::AudioProcessorEditor, private juce::Timer
@@ -41,6 +49,7 @@ namespace axsynth
         void layoutContent();
         void toggleLfoSync();
         void armCloseOnImage();
+        void showPresetMenu();
 
         AxSynthProcessor& processor;
         theme::LookAndFeel lookAndFeel;
@@ -52,7 +61,9 @@ namespace axsynth
         GearButton gear;
         LevelMeter meter;
 
-        Knob position, tone, lfoRate, lfoAmount, unison, detune, sub, cutoff, resonance, output, attack, decay, sustain, release;
+        Knob position, lines, spread, tone, contrast, unison, detune, sub, lfoRate, lfoAmount,
+             cutoff, resonance, filterEnv, output, attack, decay, sustain, release;
+        PresetButton presetButton;
 
         double lastRefreshMs = 0.0;
         bool closeSetupOnImage = false;

@@ -113,10 +113,16 @@ namespace axsynth
             newInput = true;
         lastTilt = t;
 
+        const float con = contrast.load (std::memory_order_relaxed);
+        if (std::abs (con - lastContrast) > 1.0e-4f && lastImage.isValid())
+            newInput = true;
+        lastContrast = con;
+
         if (newInput && lastImage.isValid())
         {
             builder::extractLuminance (lastImage, getRect(), lum);
-            builder::weightHarmonics (lum, target, t);
+            builder::stretchContrast (lum, stretched, con);
+            builder::weightHarmonics (stretched, target, t);
             hasTarget = true;
             converged = false;
         }

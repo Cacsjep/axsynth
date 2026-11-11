@@ -12,6 +12,10 @@ namespace axsynth::params
     inline constexpr const char* cutoff      = "cutoff";
     inline constexpr const char* resonance   = "resonance";
     inline constexpr const char* tone        = "tone";
+    inline constexpr const char* contrast    = "contrast";
+    inline constexpr const char* lines       = "lines";
+    inline constexpr const char* spread      = "spread";
+    inline constexpr const char* filterEnv   = "filterEnv";
     inline constexpr const char* unison      = "unison";
     inline constexpr const char* detune      = "detune";
     inline constexpr const char* sub         = "sub";
