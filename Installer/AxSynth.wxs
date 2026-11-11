@@ -26,13 +26,21 @@
 
     <Property Id="ARPNOREPAIR" Value="1" />
 
-    <!-- License, install, finish. No options. -->
-    <ui:WixUI Id="WixUI_Minimal" />
+    <!-- License, install folder, install, finish. The user picks the VST3 folder;
+         the AxSynth.vst3 bundle goes inside it. Default: Common Files\VST3. -->
+    <ui:WixUI Id="WixUI_InstallDir" />
+    <Property Id="WIXUI_INSTALLDIR" Value="INSTALLFOLDER" />
     <WixVariable Id="WixUILicenseRtf" Value="License.rtf" />
 
-    <!-- C:\Program Files\Common Files\VST3\AxSynth.vst3\... -->
+    <!-- Upgrades and repairs reuse the folder chosen at first install. -->
+    <Property Id="INSTALLFOLDER">
+      <RegistrySearch Id="PreviousInstallFolder" Root="HKLM" Key="Software\AxSynth"
+                      Name="InstallFolder" Type="raw" Bitness="always64" />
+    </Property>
+
+    <!-- [INSTALLFOLDER]\AxSynth.vst3\..., default C:\Program Files\Common Files\VST3 -->
     <StandardDirectory Id="CommonFiles64Folder">
-      <Directory Id="VST3Folder" Name="VST3">
+      <Directory Id="INSTALLFOLDER" Name="VST3">
         <Directory Id="BundleFolder" Name="AxSynth.vst3">
           <Directory Id="ContentsFolder" Name="Contents">
             <Directory Id="BinaryFolder" Name="x86_64-win" />
@@ -48,6 +56,10 @@
       </Component>
       <Component Directory="ResourcesFolder">
         <File Id="ModuleInfo" Source="$(var.BundleDir)\Contents\Resources\moduleinfo.json" KeyPath="yes" />
+      </Component>
+      <Component Directory="INSTALLFOLDER" Bitness="always64">
+        <RegistryValue Root="HKLM" Key="Software\AxSynth" Name="InstallFolder" Type="string"
+                       Value="[INSTALLFOLDER]" KeyPath="yes" />
       </Component>
     </Feature>
   </Package>

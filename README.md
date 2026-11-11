@@ -7,7 +7,7 @@ AxSynth is a wavetable synthesizer (VST3, Windows 64-bit) that plays live images
 ## Install
 
 1. Download `AxSynth-<version>-win64.msi` from [Releases](../../releases).
-2. Run it. AxSynth is installed to `C:\Program Files\Common Files\VST3`, where every VST3 host finds it.
+2. Run it. The default folder is `C:\Program Files\Common Files\VST3`, where every VST3 host finds it. You can pick another folder; then add it to your DAW's plugin folders.
 3. Rescan plugins in your DAW if it does not show up.
 
 Uninstall via Windows Settings, Apps.
@@ -37,3 +37,7 @@ The plugin ends up in `build\AxSynth_artefacts\Release\VST3\AxSynth.vst3`. Relea
 ## Note on signing
 
 Builds are unsigned unless a code signing certificate is configured for the release workflow. Windows SmartScreen may warn when you run an unsigned installer; choose "More info", then "Run anyway".
+
+## License
+
+MIT, see [LICENSE](LICENSE).

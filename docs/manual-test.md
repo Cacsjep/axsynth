@@ -6,7 +6,8 @@ Requirements: an Axis camera reachable on the network, with its IP, user and pas
 
 ## Install
 
-- [ ] Run `AxSynth-<version>-win64.msi`: license page, UAC prompt, install, finish. No other options.
+- [ ] Run `AxSynth-<version>-win64.msi`: MIT license page, install folder page (default `C:\Program Files\Common Files\VST3`), UAC prompt, install, finish.
+- [ ] Installing to another folder puts `AxSynth.vst3` there; a later upgrade installs into the same folder.
 - [ ] `C:\Program Files\Common Files\VST3\AxSynth.vst3\Contents\x86_64-win\AxSynth.vst3` exists.
 - [ ] Installing a newer version replaces the old one (only one AxSynth entry in Apps); installing an older one over a newer one is refused.
 

@@ -6,6 +6,11 @@ All notable changes to AxSynth are documented here. The format follows [Keep a C
 
 ## [1.0.1]
 
+### Changed
+
+- Licensed under the MIT License.
+- The installer lets you choose the install folder (default `C:\Program Files\Common Files\VST3`); upgrades reuse the chosen folder.
+
 ### Fixed
 
 - Wavetable: lower mipmaps could clip and alias on some images; all mips now share one scale.
