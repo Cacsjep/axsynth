@@ -24,7 +24,7 @@ namespace axsynth
         bool acceptsMidi() const override { return true; }
         bool producesMidi() const override { return false; }
         bool isMidiEffect() const override { return false; }
-        double getTailLengthSeconds() const override { return 10.0; }
+        double getTailLengthSeconds() const override { return 14.0; } // 10 s release reaches -80 dB after ~13.3 s
 
         int getNumPrograms() override { return 1; }
         int getCurrentProgram() override { return 0; }
@@ -47,6 +47,7 @@ namespace axsynth
         // Output peak (linear), read-and-decay by the UI.
         float getOutputPeak() const noexcept { return outputPeak.load(); }
         float takeOutputPeak() noexcept { return outputPeak.exchange (0.0f); }
+        juce::uint32 getNumTableSwaps() const noexcept { return reader.getNumSwaps(); }
 
     private:
         void renderSubBlock (float* const* channels, int numChannels, int offset, int n);
@@ -70,7 +71,7 @@ namespace axsynth
         std::atomic<float>* pRelease {};
         std::atomic<float>* pOutput {};
 
-        juce::SmoothedValue<float> sPosition, sLfoAmount, sResonance, sGain;
+        juce::SmoothedValue<float> sPosition, sLfoAmount, sResonance, sGain, sModWheel;
         juce::SmoothedValue<float, juce::ValueSmoothingTypes::Multiplicative> sCutoff;
 
         double sampleRate = 44100.0;
@@ -78,12 +79,11 @@ namespace axsynth
         double lfoSamplesPerQuarter = 22050.0; // host-sync advance
         bool lfoSyncActive = false;
         double lfoSyncQuarters = 1.0;
-        float pitchBend = 0.0f, modWheel = 0.0f;
+        float pitchBend = 0.0f;
+        float attackSec = 0.010f, releaseSec = 0.300f, lfoRateHz = 0.5f; // sanitised once per block
 
         std::atomic<float> effectivePosition { 0.5f };
         std::atomic<float> outputPeak { 0.0f };
-
-        mutable juce::CriticalSection settingsLock;
 
         JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (AxSynthProcessor)
     };

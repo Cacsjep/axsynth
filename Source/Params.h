@@ -17,7 +17,9 @@ namespace axsynth::params
 
     // Host-sync LFO divisions, length in quarter notes.
     inline const juce::StringArray syncNames { "1/16", "1/8", "1/4", "1/2", "1 Takt", "2 Takte", "4 Takte" };
+    // Note divisions in quarter notes; bar divisions (syncBars > 0) follow the host time signature.
     inline constexpr double syncQuarters[] { 0.25, 0.5, 1.0, 2.0, 4.0, 8.0, 16.0 };
+    inline constexpr double syncBars[]     { 0.0,  0.0, 0.0, 0.0, 1.0, 2.0, 4.0 };
     inline constexpr int syncDefaultIndex = 2; // 1/4
 
     // Output gain: slider minimum maps to silence (-inf).

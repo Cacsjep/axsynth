@@ -156,6 +156,22 @@ public:
             expectLessThan (harmonicMagnitude (f6, 3), 1.0e-3);
         }
 
+        beginTest ("Lower mips are not clipped when removing harmonics raises the peak");
+        {
+            // h1 + 0.3 h3 has a lower peak than h1 alone: the fundamental-only mip overshoots.
+            HarmonicMatrix amps {};
+            for (auto& fr : amps) { fr[0] = 1.0f; fr[2] = 0.3f; }
+            renderer.render (amps, *table);
+            float peak = 0.0f;
+            for (int m = 0; m < numMips; ++m)
+                for (int i = 0; i <= tableSize; ++i)
+                    peak = juce::jmax (peak, std::abs (table->frame (m, 0)[i]));
+            expectWithinAbsoluteError (peak, 1.0f, 1.0e-3f);
+            const float* f6 = table->frame (6, 0);
+            expectLessThan (harmonicMagnitude (f6, 3), 1.0e-4);
+            expectLessThan (harmonicMagnitude (f6, 5), 1.0e-4);
+        }
+
         beginTest ("Mip selection keeps harmonics below Nyquist");
         {
             for (double fHz : { 27.5, 110.0, 440.0, 1000.0, 3520.0, 8000.0 })
@@ -165,6 +181,14 @@ public:
                 if (m > 0)
                     expect (harmonicsInMip (m - 1) * fHz >= 22050.0, "mip not minimal");
             }
+            // Highest note plus full bend at common rates.
+            const double top = 440.0 * std::pow (2.0, (127 + 2 - 69) / 12.0);
+            for (double sr : { 44100.0, 48000.0, 96000.0, 192000.0 })
+                for (double fHz : { 30.0, 261.6, 1000.0, top })
+                {
+                    const int m = builder::mipForFrequency (fHz, sr);
+                    expect (harmonicsInMip (m) * fHz < 0.5 * sr, "harmonics above Nyquist");
+                }
             expectEquals (builder::mipForFrequency (100.0, 48000.0), 0);
             expectEquals (builder::mipForFrequency (30000.0, 48000.0), numMips - 1);
         }
@@ -221,12 +245,11 @@ public:
             WavetableEngine::DisplayFrames d1;
             engine.getDisplayFrames (d1);
 
-            // After one 40 ms step only part of the way: harmonic 2 present but small.
+            // After one 40 ms step exactly 1 - exp(-40/150) of the way (h1 stays at 1).
             const float* f = reader.getCurrent()->frame (0, 10);
             const double ratio1 = harmonicMagnitude (f, 2) / harmonicMagnitude (f, 1);
-            expectGreaterThan (ratio1, 0.01);
             const double fullRatio = std::pow (0.5, 0.7);
-            expectLessThan (ratio1, fullRatio * 0.6);
+            expectWithinAbsoluteError (ratio1 / fullRatio, 1.0 - std::exp (-0.040 / 0.150), 0.01);
 
             for (int i = 0; i < 100; ++i)
                 engine.stepForTesting (0.040);

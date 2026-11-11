@@ -33,7 +33,7 @@ env:
 jobs:
   prepare:
     name: Version and release notes
-    runs-on: windows-latest
+    runs-on: windows-2022
     outputs:
       version: ${{ steps.version.outputs.version }}
     defaults:
@@ -49,6 +49,10 @@ jobs:
         run: |
           $v = if ($env:GITHUB_EVENT_NAME -eq 'workflow_dispatch') { $env:INPUT_VERSION } else { $env:GITHUB_REF_NAME -replace '^v', '' }
           if ($v -notmatch '^\d+\.\d+\.\d+$') { Write-Host "::error::Version '$v' is not x.y.z"; exit 1 }
+          # A manual run on a tag must use that tag's version, or the release would be mislabelled.
+          if ($env:GITHUB_REF_TYPE -eq 'tag' -and $v -ne ($env:GITHUB_REF_NAME -replace '^v', '')) {
+            Write-Host "::error::Version '$v' does not match tag '$env:GITHUB_REF_NAME'"; exit 1
+          }
           echo "version=$v" >> $env:GITHUB_OUTPUT
           Write-Host "Version: $v"
 
@@ -69,7 +73,7 @@ jobs:
   package:
     name: Package and publish
     needs: [prepare, build]
-    runs-on: windows-latest
+    runs-on: windows-2022
     permissions:
       contents: write
     defaults:

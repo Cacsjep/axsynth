@@ -170,6 +170,12 @@ namespace axsynth::test
         return log;
     }
 
+    juce::StringArray MockCameraServer::getAuthLog() const
+    {
+        const juce::ScopedLock sl (logLock);
+        return authLog;
+    }
+
     void MockCameraServer::dropConnections()
     {
         ++dropGeneration;
@@ -217,31 +223,33 @@ namespace axsynth::test
     {
         const auto auth = headers["Authorization"];
 
+        const auto basicOk = [&]
+        {
+            const auto up = (config.user + ":" + config.password).toStdString();
+            return auth == "Basic " + juce::Base64::toBase64 (up.data(), up.size());
+        };
+
+        const auto digestOk = [&]
+        {
+            if (! auth.startsWithIgnoreCase ("Digest "))
+                return false;
+
+            const auto p = parseDigest (auth);
+            if (p["username"] != config.user || p["realm"] != realm || p["qop"] != "auth" || p["uri"] != uri)
+                return false;
+
+            const auto ha1 = md5Hex (config.user + ":" + realm + ":" + config.password);
+            const auto ha2 = md5Hex ("GET:" + p["uri"]);
+            const auto expected = md5Hex (ha1 + ":" + p["nonce"] + ":" + p["nc"] + ":" + p["cnonce"] + ":auth:" + ha2);
+            return p["response"].equalsIgnoreCase (expected);
+        };
+
         switch (config.auth)
         {
-            case Auth::none:
-                return true;
-
-            case Auth::basic:
-            {
-                const auto up = (config.user + ":" + config.password).toStdString();
-                return auth == "Basic " + juce::Base64::toBase64 (up.data(), up.size());
-            }
-
-            case Auth::digest:
-            {
-                if (! auth.startsWithIgnoreCase ("Digest "))
-                    return false;
-
-                const auto p = parseDigest (auth);
-                if (p["username"] != config.user || p["realm"] != realm || p["qop"] != "auth" || p["uri"] != uri)
-                    return false;
-
-                const auto ha1 = md5Hex (config.user + ":" + realm + ":" + config.password);
-                const auto ha2 = md5Hex ("GET:" + p["uri"]);
-                const auto expected = md5Hex (ha1 + ":" + p["nonce"] + ":" + p["nc"] + ":" + p["cnonce"] + ":auth:" + ha2);
-                return p["response"].equalsIgnoreCase (expected);
-            }
+            case Auth::none:   return true;
+            case Auth::basic:  return basicOk();
+            case Auth::digest: return digestOk();
+            case Auth::both:   return basicOk() || digestOk();
         }
         return false;
     }
@@ -263,8 +271,11 @@ namespace axsynth::test
                              lines[i].fromFirstOccurrenceOf (":", false, false).trim());
 
             {
+                const auto authHeader = headers["Authorization"];
                 const juce::ScopedLock sl (logLock);
                 log.add ("GET " + uri);
+                authLog.add (uri + " " + (authHeader.isEmpty() ? juce::String ("-")
+                                                               : authHeader.upToFirstOccurrenceOf (" ", false, false)));
             }
 
             if (config.hangAll)
@@ -276,11 +287,11 @@ namespace axsynth::test
             if (! checkAuth (headers, uri))
             {
                 juce::String challenge;
-                if (config.auth == Auth::digest)
+                if (config.auth == Auth::digest || config.auth == Auth::both)
                     challenge << "WWW-Authenticate: Digest realm=\"" << realm << "\", nonce=\""
                               << juce::String::toHexString (juce::Random::getSystemRandom().nextInt64())
                               << "\", algorithm=MD5, qop=\"auth\"\r\n";
-                else
+                if (config.auth == Auth::basic || config.auth == Auth::both)
                     challenge << "WWW-Authenticate: Basic realm=\"" << realm << "\"\r\n";
 
                 if (! sendResponse (s, 401, "Unauthorized", challenge, "Unauthorized"))
@@ -289,6 +300,13 @@ namespace axsynth::test
             }
 
             const auto path = uri.upToFirstOccurrenceOf ("?", false, false);
+
+            if (path == "/axis-cgi/param.cgi" && config.axisParams && config.paramStatus != 200)
+            {
+                if (! sendResponse (s, config.paramStatus, "Error", {}, "Error"))
+                    return;
+                continue;
+            }
 
             if (path == "/axis-cgi/param.cgi" && config.axisParams)
             {
@@ -310,6 +328,13 @@ namespace axsynth::test
             if (path != config.streamPath)
             {
                 if (! sendResponse (s, 404, "Not Found", {}, "Not Found"))
+                    return;
+                continue;
+            }
+
+            if (config.streamStatus != 200)
+            {
+                if (! sendResponse (s, config.streamStatus, "Error", {}, "Error"))
                     return;
                 continue;
             }

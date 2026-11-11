@@ -162,7 +162,9 @@ namespace axsynth
 
         const float dx = (e.position.x - downPos.x) / area.getWidth();
         const float dy = (e.position.y - downPos.y) / area.getHeight();
-        const float minW = minSizePx / area.getWidth(), minH = minSizePx / area.getHeight();
+        // Minimum size, never larger than the rect already is (a restored rect may be smaller).
+        const float minW = juce::jmin (minSizePx / area.getWidth(), rectOnDown.getWidth());
+        const float minH = juce::jmin (minSizePx / area.getHeight(), rectOnDown.getHeight());
 
         float x0 = rectOnDown.getX(), y0 = rectOnDown.getY();
         float x1 = rectOnDown.getRight(), y1 = rectOnDown.getBottom();

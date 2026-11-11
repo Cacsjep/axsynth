@@ -2,6 +2,7 @@
 // with simulated wavetable swaps, and fails if the audio thread allocates.
 #include "PluginProcessor.h"
 #include <atomic>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <new>
@@ -29,6 +30,22 @@ void operator delete (void* p) noexcept { if (guardActive && p) violations.fetch
 void operator delete[] (void* p) noexcept { if (guardActive && p) violations.fetch_add (1); std::free (p); }
 void operator delete (void* p, std::size_t) noexcept { operator delete (p); }
 void operator delete[] (void* p, std::size_t) noexcept { operator delete[] (p); }
+
+// Host transport: playing at 128 BPM in 3/4, so the synced LFO path runs under the guard.
+struct MockPlayHead : juce::AudioPlayHead
+{
+    double ppq = 0.0;
+    juce::Optional<PositionInfo> getPosition() const override
+    {
+        PositionInfo info;
+        info.setIsPlaying (true);
+        info.setBpm (128.0);
+        info.setTimeSignature (TimeSignature { 3, 4 });
+        info.setPpqPosition (ppq);
+        info.setPpqPositionOfLastBarStart (std::floor (ppq / 3.0) * 3.0);
+        return info;
+    }
+};
 
 static juce::Image makeTestImage (int seed)
 {
@@ -68,6 +85,9 @@ int main()
     proc.getState().getParameter (axsynth::params::lfoAmount)->setValueNotifyingHost (0.6f);
     proc.getState().getParameter (axsynth::params::lfoRate)->setValueNotifyingHost (0.9f);
 
+    MockPlayHead playHead;
+    proc.setPlayHead (&playHead);
+
     juce::AudioBuffer<float> buffer (2, blockSize);
     juce::MidiBuffer midi;
     midi.ensureSize (4096);
@@ -94,21 +114,46 @@ int main()
             juce::Thread::sleep (1);
         }
 
+        // Second half: host-synced LFO, cycling through note and bar divisions.
+        if (b == numBlocks / 2)
+            proc.getState().getParameter (axsynth::params::lfoSync)->setValueNotifyingHost (1.0f);
+        if (b >= numBlocks / 2 && b % 500 == 0)
+            proc.getState().getParameter (axsynth::params::lfoRateSync)->setValueNotifyingHost ((float) ((b / 500) % 7) / 6.0f);
+
+        // Varying block sizes, as hosts do, never above the prepared size.
+        const int n = 1 + (b * 7919) % blockSize;
+        juce::AudioBuffer<float> view (buffer.getArrayOfWritePointers(), 2, n);
+        for (const auto meta : midi)
+            if (meta.samplePosition >= n)
+            {
+                // keep events inside the shorter block
+                juce::MidiBuffer clipped;
+                for (const auto m : midi)
+                    clipped.addEvent (m.getMessage(), juce::jmin (m.samplePosition, n - 1));
+                midi.swapWith (clipped);
+                break;
+            }
+
         guardActive = true;
-        proc.processBlock (buffer, midi);
+        proc.processBlock (view, midi);
         guardActive = false;
 
-        if (buffer.getMagnitude (0, 0, blockSize) > 1.0e-4f)
+        playHead.ppq += n * 128.0 / 60.0 / sampleRate;
+
+        if (view.getMagnitude (0, 0, n) > 1.0e-4f)
             ++nonSilentBlocks;
     }
 
+    const auto swapsTaken = proc.getNumTableSwaps();
+    proc.setPlayHead (nullptr);
     proc.releaseResources();
 
     const auto v = violations.load();
-    std::printf ("blocks: %d, swaps injected: %d, non-silent blocks: %lld, audio-thread allocations: %lld\n",
-                 numBlocks, swapsInjected, nonSilentBlocks, v);
+    std::printf ("blocks: %d, swaps injected: %d, swaps taken by audio thread: %u, non-silent blocks: %lld, audio-thread allocations: %lld\n",
+                 numBlocks, swapsInjected, (unsigned) swapsTaken, nonSilentBlocks, v);
 
     if (v != 0)        { std::printf ("FAIL: audio thread allocated\n"); return 1; }
+    if (swapsTaken < 10) { std::printf ("FAIL: wavetable swaps did not reach the audio thread\n"); return 1; }
     if (nonSilentBlocks < numBlocks / 4) { std::printf ("FAIL: too little audio output\n"); return 1; }
     std::printf ("PASS\n");
     return 0;

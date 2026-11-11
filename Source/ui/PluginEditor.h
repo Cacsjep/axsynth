@@ -39,6 +39,7 @@ namespace axsynth
         void timerCallback() override { refresh(); }
         void layoutContent();
         void toggleLfoSync();
+        void armCloseOnImage();
 
         AxSynthProcessor& processor;
         theme::LookAndFeel lookAndFeel;
@@ -54,7 +55,7 @@ namespace axsynth
 
         double lastRefreshMs = 0.0;
         bool closeSetupOnImage = false;
-        juce::uint64 imageCountWhenArmed = 0;
+        juce::uint64 frameCountWhenArmed = 0;
 
         JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (AxSynthEditor)
     };

@@ -24,16 +24,22 @@ namespace axsynth
 
     void WavetableEngine::setRect (juce::Rectangle<float> r)
     {
-        r = r.getIntersection ({ 0.0f, 0.0f, 1.0f, 1.0f });
-        if (r.getWidth() < 0.01f || r.getHeight() < 0.01f)
+        if (! (std::isfinite (r.getX()) && std::isfinite (r.getY()) && std::isfinite (r.getWidth()) && std::isfinite (r.getHeight())))
             return;
-        rx = r.getX(); ry = r.getY(); rw = r.getWidth(); rh = r.getHeight();
+        r = r.getIntersection ({ 0.0f, 0.0f, 1.0f, 1.0f });
+        if (! (r.getWidth() >= 0.01f && r.getHeight() >= 0.01f))
+            return;
+        {
+            const juce::SpinLock::ScopedLockType sl (rectLock);
+            rect = r;
+        }
         ++rectVersion;
     }
 
     juce::Rectangle<float> WavetableEngine::getRect() const
     {
-        return { rx.load(), ry.load(), rw.load(), rh.load() };
+        const juce::SpinLock::ScopedLockType sl (rectLock);
+        return rect;
     }
 
     juce::Image WavetableEngine::getDisplayImage() const

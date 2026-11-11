@@ -11,6 +11,9 @@ function(axsynth_add_test_app name)
         JUCE_STANDALONE_APPLICATION=1 AXSYNTH_TESTING=1)
     target_link_libraries(${name} PRIVATE ${AXSYNTH_MODULES} ${AXSYNTH_SYSLIBS} ws2_32
         juce::juce_recommended_config_flags juce::juce_recommended_warning_flags)
+    if(AXSYNTH_WARNINGS_AS_ERRORS AND MSVC)
+        target_compile_options(${name} PRIVATE /WX)
+    endif()
 endfunction()
 
 # Unit tests + smoke test (JUCE UnitTest framework).

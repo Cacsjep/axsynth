@@ -16,7 +16,7 @@ namespace axsynth::params
     juce::String formatHz (float hz)
     {
         if (hz >= 1000.0f)
-            return juce::String (hz / 1000.0f, hz >= 10000.0f ? 1 : 2) + " kHz";
+            return juce::String (hz / 1000.0f, 1) + " kHz";
         if (hz >= 10.0f)
             return juce::String (juce::roundToInt (hz)) + " Hz";
         return juce::String (hz, 2) + " Hz";

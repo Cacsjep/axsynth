@@ -66,6 +66,21 @@ namespace axsynth::test
             return frames;
         }
 
+        // Copy of a JPEG with the SOF0 dimensions rewritten (the pixel data stays small).
+        juce::MemoryBlock withDimensions (const juce::MemoryBlock& jpeg, int w, int h)
+        {
+            juce::MemoryBlock b (jpeg);
+            auto* d = static_cast<juce::uint8*> (b.getData());
+            for (size_t i = 0; i + 9 < b.getSize(); ++i)
+                if (d[i] == 0xFF && d[i + 1] == 0xC0)
+                {
+                    d[i + 5] = (juce::uint8) (h >> 8); d[i + 6] = (juce::uint8) h;
+                    d[i + 7] = (juce::uint8) (w >> 8); d[i + 8] = (juce::uint8) w;
+                    break;
+                }
+            return b;
+        }
+
         bool waitFor (const std::function<bool()>& pred, int timeoutMs)
         {
             const auto end = juce::Time::getMillisecondCounter() + (juce::uint32) timeoutMs;
@@ -141,6 +156,10 @@ namespace axsynth::test
             expectEquals (pickResolution ("Properties.Image.Resolution=abc,x,320x,x180,-320x180,1000x1"), juce::String());
             expectEquals (pickResolution ("<html><body>404</body></html>"), juce::String());
             expectEquals (pickResolution ("Properties.Image.Resolution=1280x720,800x600\r\n"), juce::String ("800x600"));
+            // nothing 16:9 or 4:3 with width >= 320: smallest sane aspect with width >= 320
+            expectEquals (pickResolution ("Properties.Image.Resolution=2048x2048,1024x1024,640x640,320x320,160x160"), juce::String ("320x320"));
+            expectEquals (pickResolution ("Properties.Image.Resolution=1280x1024,640x360x,2560x640,160x90", "16:9"), juce::String ("1280x1024"));
+            expectEquals (pickResolution ("Properties.Image.Resolution=1600x200,4000x900"), juce::String());
         }
 
         void testApplyResolution()
@@ -148,11 +167,11 @@ namespace axsynth::test
             beginTest ("applyResolution");
             const auto def = CameraSettings::defaultStreamPath();
             expectEquals (applyResolution (def, "320x180"), juce::String ("/axis-cgi/mjpg/video.cgi?resolution=320x180&fps=25"));
-            expectEquals (applyResolution (def, ""), juce::String ("/axis-cgi/mjpg/video.cgi?fps=25"));
+            expectEquals (applyResolution (def, ""), def); // no replacement: keep the user's parameter
             expectEquals (applyResolution ("/axis-cgi/mjpg/video.cgi", "320x180"), juce::String ("/axis-cgi/mjpg/video.cgi?resolution=320x180"));
             expectEquals (applyResolution ("/axis-cgi/mjpg/video.cgi?fps=10", "320x180"), juce::String ("/axis-cgi/mjpg/video.cgi?fps=10&resolution=320x180"));
             expectEquals (applyResolution ("/video.mjpg", ""), juce::String ("/video.mjpg"));
-            expectEquals (applyResolution ("/v.cgi?resolution=640x480", ""), juce::String ("/v.cgi"));
+            expectEquals (applyResolution ("/v.cgi?resolution=640x480", ""), juce::String ("/v.cgi?resolution=640x480"));
             expectEquals (applyResolution ("/v.cgi?a=1&Resolution=640x480&b=2", "320x240"), juce::String ("/v.cgi?a=1&resolution=320x240&b=2"));
             expectEquals (applyResolution ("/v.cgi?resolution=1&resolution=2", "320x240"), juce::String ("/v.cgi?resolution=320x240"));
             expectEquals (applyResolution ("/v.cgi?", "320x240"), juce::String ("/v.cgi?resolution=320x240"));
@@ -161,7 +180,8 @@ namespace axsynth::test
         void testErrorMessages()
         {
             beginTest ("errorMessageFor");
-            expectEquals (errorMessageFor (ConnectFailure::unreachable, "10.0.0.48"), juce::String ("Kamera unter 10.0.0.48 nicht erreichbar"));
+            expectEquals (errorMessageFor (ConnectFailure::unreachable, "192.0.2.10"), juce::String ("Kamera unter 192.0.2.10 nicht erreichbar"));
+            expectEquals (errorMessageFor (ConnectFailure::unreachable, "http://bob:pw@cam:81"), juce::String ("Kamera unter http://cam:81 nicht erreichbar"));
             expectEquals (errorMessageFor (ConnectFailure::unauthorized, "x"), juce::String ("Benutzername oder Passwort falsch"));
             expectEquals (errorMessageFor (ConnectFailure::notFound, "x"), juce::String ("Stream-Pfad nicht gefunden"));
             const auto noImage = errorMessageFor (ConnectFailure::noImage, "x");
@@ -185,18 +205,79 @@ namespace axsynth::test
             expectEquals (dpapiUnprotect (""), juce::String());
             expectEquals (dpapiUnprotect ("bm90IGVuY3J5cHRlZA=="), juce::String());
             expectEquals (dpapiUnprotect ("%%% not base64 %%%"), juce::String());
+
+            beginTest ("DPAPI deterministic + state helpers");
+            expectEquals (dpapiProtect (pw), enc, "same password, same blob");
+            juce::String plain;
+            expect (! dpapiTryUnprotect ("bm90IGVuY3J5cHRlZA==", plain));
+            expect (dpapiTryUnprotect ({}, plain) && plain.isEmpty());
+
+            {
+                CameraSettings s;
+                passwordFromState (s, enc);
+                expectEquals (s.password, pw);
+                expect (s.undecryptablePassword.isEmpty());
+                expectEquals (passwordForState (s), enc, "re-saving writes the loaded blob back");
+
+                // A blob from another user/machine: password empty, blob kept for the next save.
+                const juce::String foreign ("AQAAANCMnd8BFdERjHoAwE/Cl+sBAAAAbm90IG91cnM=");
+                CameraSettings t;
+                t.host = "cam"; t.user = "root";
+                passwordFromState (t, foreign);
+                expect (t.password.isEmpty());
+                expectEquals (t.undecryptablePassword, foreign);
+                expectEquals (passwordForState (t), foreign);
+                expect (! t.hasCredentials(), "undecryptable password -> setup panel");
+
+                t.password = "typed-again";
+                expectEquals (dpapiUnprotect (passwordForState (t)), juce::String ("typed-again"));
+            }
+
+            {
+                CameraSettings s;
+                expect (! s.hasCredentials());
+                s.host = "cam";            expect (! s.hasCredentials());
+                s.user = "root";           expect (! s.hasCredentials());
+                s.password = "x";          expect (s.hasCredentials());
+                s.host = {};               expect (! s.hasCredentials());
+            }
         }
 
         void testHostParsing()
         {
             beginTest ("host:port parsing");
             juce::String h; int p = 0;
-            http::splitHostPort ("10.0.0.48", h, p, true);           expectEquals (h, juce::String ("10.0.0.48")); expectEquals (p, 443);
-            http::splitHostPort ("10.0.0.48", h, p, false);          expectEquals (p, 80);
+            http::splitHostPort ("192.0.2.10", h, p, true);           expectEquals (h, juce::String ("192.0.2.10")); expectEquals (p, 443);
+            http::splitHostPort ("192.0.2.10", h, p, false);          expectEquals (p, 80);
             http::splitHostPort ("127.0.0.1:8080", h, p, true);      expectEquals (h, juce::String ("127.0.0.1")); expectEquals (p, 8080);
             http::splitHostPort ("http://cam.local:81/x", h, p, false); expectEquals (h, juce::String ("cam.local")); expectEquals (p, 81);
             http::splitHostPort ("[fe80::1]:8443", h, p, true);      expectEquals (h, juce::String ("fe80::1")); expectEquals (p, 8443);
             http::splitHostPort (" cam ", h, p, false);              expectEquals (h, juce::String ("cam"));
+            http::splitHostPort ("bob:pw@cam:81", h, p, true);       expectEquals (h, juce::String ("cam")); expectEquals (p, 81);
+
+            beginTest ("host entry restricts the cascade");
+            auto spec = http::parseHost ("192.0.2.10");
+            expect (spec.allowHttps && spec.allowHttp); expectEquals (spec.port, 0); expectEquals (spec.host, juce::String ("192.0.2.10"));
+            spec = http::parseHost ("192.0.2.10:443");   expect (spec.allowHttps && ! spec.allowHttp); expectEquals (spec.port, 443);
+            spec = http::parseHost ("192.0.2.10:80");    expect (! spec.allowHttps && spec.allowHttp); expectEquals (spec.port, 80);
+            spec = http::parseHost ("192.0.2.10:8080");  expect (spec.allowHttps && spec.allowHttp); expectEquals (spec.port, 8080);
+            spec = http::parseHost ("https://cam");     expect (spec.allowHttps && ! spec.allowHttp); expectEquals (spec.host, juce::String ("cam"));
+            spec = http::parseHost ("HTTP://cam/x");    expect (! spec.allowHttps && spec.allowHttp);
+            spec = http::parseHost ("http://cam:443");  expect (! spec.allowHttps && spec.allowHttp); expectEquals (spec.port, 443);
+            spec = http::parseHost ("[fe80::1]:443");   expect (spec.allowHttps && ! spec.allowHttp); expectEquals (spec.host, juce::String ("fe80::1"));
+
+            beginTest ("credentials in the host entry are stripped");
+            expectEquals (http::stripUserInfo ("root:secret@192.0.2.10"), juce::String ("192.0.2.10"));
+            expectEquals (http::stripUserInfo ("https://root:se@cret@cam:8443/x"), juce::String ("https://cam:8443/x"));
+            expectEquals (http::stripUserInfo ("cam/path@x"), juce::String ("cam/path@x"));
+            expectEquals (http::stripUserInfo (" cam "), juce::String ("cam"));
+            {
+                CameraConnector cam;
+                CameraSettings s;
+                s.host = "http://root:secret@cam:81";
+                cam.setSettings (s);
+                expectEquals (cam.getSettings().host, juce::String ("http://cam:81"));
+            }
         }
 
         void testTripleBuffer()
@@ -283,6 +364,57 @@ namespace axsynth::test
                 for (const auto& j : jpegs) { raw.write (j.getData(), j.getSize()); raw << "\r\n"; }
                 checkFrames (parseInChunks ({}, raw.getMemoryBlock(), rng, 1), "soi 1");
                 checkFrames (parseInChunks ({}, raw.getMemoryBlock(), rng, 300), "soi 300");
+            }
+
+            beginTest ("JPEG size guard");
+            {
+                int w = 0, h = 0;
+                const auto j = makeJpeg (320, 180, 1);
+                const auto* d = static_cast<const juce::uint8*> (j.getData());
+                expect (MjpegParser::jpegDimensions (d, j.getSize(), w, h));
+                expectEquals (w, 320); expectEquals (h, 180);
+                expect (MjpegParser::isDecodableSize (d, j.getSize()));
+
+                const auto huge = withDimensions (j, 65000, 65000);
+                expect (MjpegParser::jpegDimensions (static_cast<const juce::uint8*> (huge.getData()), huge.getSize(), w, h));
+                expectEquals (w, 65000);
+                expect (! MjpegParser::isDecodableSize (static_cast<const juce::uint8*> (huge.getData()), huge.getSize()));
+
+                const auto wide = withDimensions (j, 4097, 16);
+                expect (! MjpegParser::isDecodableSize (static_cast<const juce::uint8*> (wide.getData()), wide.getSize()));
+                const auto edge = withDimensions (j, 4096, 4096);
+                expect (MjpegParser::isDecodableSize (static_cast<const juce::uint8*> (edge.getData()), edge.getSize()));
+
+                const juce::uint8 garbage[] = { 0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x01, 0x00 };
+                expect (! MjpegParser::jpegDimensions (garbage, sizeof (garbage), w, h));
+                expect (! MjpegParser::jpegDimensions (d, 20, w, h), "header cut before SOF");
+                expect (! MjpegParser::isDecodableSize (d + 2, j.getSize() - 2), "no SOI");
+            }
+
+            beginTest ("MJPEG parser, recorded Axis framing fixture");
+            {
+                // Framing, part headers and JPEG header segments (APP0, Exif APP1, COM) as sent
+                // by an AXIS P3265-V at 320x180; picture content synthetic and Exif anonymised.
+                // The recording ends in the middle of the sixth part.
+                const auto file = juce::File (__FILE__).getSiblingFile ("fixtures").getChildFile ("axis_320x180.mjpg");
+                juce::MemoryBlock data;
+                expect (file.loadFileAsData (data), "fixture " + file.getFullPathName());
+
+                for (const int maxChunk : { 1, 7, 1000, 100000 })
+                {
+                    const auto got = parseInChunks (MjpegParser::boundaryFromContentType ("multipart/x-mixed-replace; boundary=myboundary"),
+                                                    data, rng, maxChunk);
+                    expectEquals ((int) got.size(), 5, "fixture frames, chunk " + juce::String (maxChunk));
+
+                    for (const auto& f : got)
+                    {
+                        juce::MemoryInputStream in (f, false);
+                        juce::JPEGImageFormat fmt;
+                        const auto img = fmt.decodeImage (in);
+                        expect (img.getWidth() == 320 && img.getHeight() == 180);
+                        expect (MjpegParser::isDecodableSize (static_cast<const juce::uint8*> (f.getData()), f.getSize()));
+                    }
+                }
             }
 
             beginTest ("MJPEG parser, frames decode");
@@ -378,10 +510,16 @@ namespace axsynth::test
                 cam.connect (true);
                 expect (waitForSettled (cam, 10000));
                 expect (cam.getStatus() == Status::streaming, cam.getErrorMessage());
-                expectEquals (server.getTlsRejects(), 0);
-                const auto log = server.getRequestLog();
-                expectEquals (log.size(), 1);
+
+                // Apart from the unauthenticated reachability probe ("GET /"), the first
+                // request is the stream with the remembered resolution: no param.cgi discovery.
+                juce::StringArray log;
+                for (const auto& l : server.getRequestLog())
+                    if (l != "GET /")
+                        log.add (l);
+                expect (log.size() >= 1);
                 expectEquals (log[0], juce::String ("GET /axis-cgi/mjpg/video.cgi?resolution=320x180&fps=25"));
+                expect (! server.getRequestLog().joinIntoString ("|").contains ("param.cgi"));
             }
 
             beginTest ("stale remembered combo falls back to cascade");
@@ -418,7 +556,7 @@ namespace axsynth::test
                 cam.connect (true);
                 expect (waitForSettled (cam, 15000));
                 expect (cam.getStatus() == Status::streaming, cam.getErrorMessage());
-                expect (server.getRequestLog().contains ("GET /video.mjpg"));
+                expect (server.getRequestLog().contains ("GET /video.mjpg?resolution=640x360"), "path kept as entered");
                 expectEquals (cam.getSettings().resolution, juce::String());
             }
 
@@ -586,6 +724,205 @@ namespace axsynth::test
                 }
                 const auto dt = juce::Time::getMillisecondCounter() - t0;
                 expect (dt < 5000, "20 cycles took " + juce::String ((int) dt) + " ms");
+            }
+
+            beginTest ("no Basic to a Digest-only server, credentials only after a challenge");
+            {
+                MockCameraServer::Config cfg;
+                cfg.auth = MockCameraServer::Auth::digest;
+                cfg.jpegs = jpegs;
+                MockCameraServer server (cfg);
+
+                CameraConnector cam;
+                cam.setSettings (settingsFor (server, "user", "typo"));
+                cam.connect (true);
+                expect (waitForSettled (cam, 15000));
+                expectEquals (cam.getErrorMessage(), juce::String ("Benutzername oder Passwort falsch"));
+
+                const auto authLog = server.getAuthLog();
+                expect (authLog.size() > 0);
+                for (const auto& l : authLog)
+                    expect (! l.endsWith (" Basic"), "Basic sent: " + l);
+                expect (authLog.joinIntoString ("|").contains (" Digest"), "Digest was tried");
+            }
+
+            {
+                MockCameraServer::Config cfg;
+                cfg.auth = MockCameraServer::Auth::basic;
+                cfg.jpegs = jpegs;
+                MockCameraServer server (cfg);
+
+                CameraConnector cam;
+                cam.setSettings (settingsFor (server));
+                cam.connect (true);
+                expect (waitFor ([&] { return cam.getStatus() == Status::streaming; }, 15000));
+
+                // Every path that got Basic was asked for without credentials first.
+                juce::StringArray challenged;
+                int basicCount = 0;
+                for (const auto& l : server.getAuthLog())
+                {
+                    const auto path = l.upToLastOccurrenceOf (" ", false, false);
+                    if (l.endsWith (" -"))
+                        challenged.addIfNotAlreadyThere (path);
+                    else if (l.endsWith (" Basic"))
+                    {
+                        ++basicCount;
+                        expect (challenged.contains (path), "unsolicited Basic for " + path);
+                    }
+                }
+                expect (basicCount > 0);
+            }
+
+            beginTest ("Basic + Digest offered (like Axis over HTTP): Digest wins");
+            {
+                MockCameraServer::Config cfg;
+                cfg.auth = MockCameraServer::Auth::both;
+                cfg.jpegs = jpegs;
+                MockCameraServer server (cfg);
+
+                CameraConnector cam;
+                cam.setSettings (settingsFor (server));
+                cam.connect (true);
+                expect (waitForSettled (cam, 15000));
+                expect (cam.getStatus() == Status::streaming, cam.getErrorMessage());
+                expectEquals (cam.getSettings().auth, juce::String ("digest"));
+                expect (! server.getAuthLog().joinIntoString ("|").contains (" Basic"));
+            }
+
+            beginTest ("status mapping: 403, 400, 500, param.cgi 403");
+            {
+                auto failWith = [&] (int streamStatus) -> juce::String
+                {
+                    MockCameraServer::Config cfg;
+                    cfg.auth = MockCameraServer::Auth::basic;
+                    cfg.jpegs = jpegs;
+                    cfg.streamStatus = streamStatus;
+                    MockCameraServer server (cfg);
+
+                    CameraConnector cam;
+                    cam.setSettings (settingsFor (server));
+                    cam.connect (true);
+                    expect (waitForSettled (cam, 15000));
+                    expect (cam.getStatus() == Status::failed);
+                    return cam.getErrorMessage();
+                };
+
+                expectEquals (failWith (403), juce::String ("Benutzername oder Passwort falsch"));
+                expectEquals (failWith (400), juce::String ("Stream-Pfad nicht gefunden"));
+                expectEquals (failWith (500), juce::String ("Stream-Pfad nicht gefunden"));
+
+                // A user without rights for param.cgi still gets the stream (path as entered).
+                MockCameraServer::Config cfg;
+                cfg.auth = MockCameraServer::Auth::basic;
+                cfg.jpegs = jpegs;
+                cfg.paramStatus = 403;
+                MockCameraServer server (cfg);
+                CameraConnector cam;
+                cam.setSettings (settingsFor (server));
+                cam.connect (true);
+                expect (waitForSettled (cam, 15000));
+                expect (cam.getStatus() == Status::streaming, cam.getErrorMessage());
+                expect (server.getRequestLog().contains ("GET " + CameraSettings::defaultStreamPath()));
+                expectEquals (cam.getSettings().resolution, juce::String());
+            }
+
+            beginTest ("scheme prefix restricts the cascade");
+            {
+                MockCameraServer::Config cfg;
+                cfg.auth = MockCameraServer::Auth::basic;
+                cfg.jpegs = jpegs;
+                MockCameraServer server (cfg);
+
+                {
+                    CameraConnector cam;
+                    auto s = settingsFor (server);
+                    s.host = "http://" + s.host;
+                    cam.setSettings (s);
+                    cam.connect (true);
+                    expect (waitForSettled (cam, 15000));
+                    expect (cam.getStatus() == Status::streaming, cam.getErrorMessage());
+                    expectEquals (server.getTlsRejects(), 0, "no HTTPS attempt for http://");
+                    cam.disconnect();
+                }
+
+                {
+                    const auto before = server.getRequestLog().size();
+                    CameraConnector cam;
+                    auto s = settingsFor (server);
+                    s.host = "https://" + s.host;
+                    cam.setSettings (s);
+                    cam.connect (true);
+                    expect (waitForSettled (cam, 15000));
+                    expect (cam.getStatus() == Status::failed);
+                    expectEquals (cam.getErrorMessage(), "Kamera unter " + s.host + " nicht erreichbar");
+                    expectEquals (server.getRequestLog().size(), before, "no plain HTTP request for https://");
+                    expect (server.getTlsRejects() >= 1);
+                }
+            }
+
+            beginTest ("oversized JPEG is never decoded");
+            {
+                MockCameraServer::Config cfg;
+                cfg.auth = MockCameraServer::Auth::basic;
+                cfg.jpegs = { withDimensions (jpegs[0], 65000, 65000) };
+                MockCameraServer server (cfg);
+
+                CameraConnector cam;
+                cam.setSettings (settingsFor (server));
+                const auto t0 = juce::Time::getMillisecondCounter();
+                cam.connect (true);
+                expect (waitForSettled (cam, 15000));
+                const auto dt = juce::Time::getMillisecondCounter() - t0;
+                expect (cam.getStatus() == Status::failed);
+                expectEquals (cam.getErrorMessage(), errorMessageFor (ConnectFailure::noImage, {}));
+                expect (dt < 7000, "oversized stream rejected after " + juce::String ((int) dt) + " ms");
+                expectEquals ((int) cam.getFrameCount(), 0);
+
+                // Silent mode keeps receiving the bad frames; teardown must stay fast.
+                cam.connect (false);
+                juce::Thread::sleep (1500);
+                const auto t1 = juce::Time::getMillisecondCounter();
+                cam.disconnect();
+                const auto td = juce::Time::getMillisecondCounter() - t1;
+                expect (td < 1000, "disconnect while receiving oversized frames took " + juce::String ((int) td) + " ms");
+            }
+
+            beginTest ("black hole (listening, never answering) fails within ~5 s");
+            {
+                juce::StreamingSocket listener; // completes TCP handshakes in the backlog, never answers
+                expect (listener.createListener (0, "127.0.0.1"));
+
+                CameraConnector cam;
+                CameraSettings s;
+                s.host = "127.0.0.1:" + juce::String (listener.getBoundPort());
+                s.user = "user"; s.password = "secret";
+                cam.setSettings (s);
+                const auto t0 = juce::Time::getMillisecondCounter();
+                cam.connect (true);
+                expect (waitForSettled (cam, 20000));
+                const auto dt = juce::Time::getMillisecondCounter() - t0;
+                note ("  black hole cascade took " + juce::String ((int) dt) + " ms");
+                expect (cam.getStatus() == Status::failed);
+                expectEquals (cam.getErrorMessage(), "Kamera unter " + s.host + " nicht erreichbar");
+                expect (dt <= 6000, "black hole took " + juce::String ((int) dt) + " ms");
+            }
+
+            beginTest ("silent mode stops on wrong credentials");
+            {
+                MockCameraServer::Config cfg;
+                cfg.auth = MockCameraServer::Auth::digest;
+                cfg.jpegs = jpegs;
+                MockCameraServer server (cfg);
+
+                CameraConnector cam;
+                cam.setSettings (settingsFor (server, "user", "changed-on-camera"));
+                cam.connect (false);
+                expect (waitFor ([&] { return cam.getStatus() == Status::failed; }, 15000));
+                expectEquals (cam.getErrorMessage(), juce::String ("Benutzername oder Passwort falsch"));
+                const auto requests = server.getRequestLog().size();
+                juce::Thread::sleep (1500);
+                expectEquals (server.getRequestLog().size(), requests, "no further login attempts");
             }
 
             beginTest ("connector without settings");

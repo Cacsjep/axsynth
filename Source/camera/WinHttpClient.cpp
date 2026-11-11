@@ -74,17 +74,30 @@ namespace axsynth::http
 
     // ---- helpers --------------------------------------------------------------
 
+    juce::String stripUserInfo (const juce::String& hostEntry)
+    {
+        const auto s = hostEntry.trim();
+        const auto schemeEnd = s.indexOf ("://");
+        const auto authorityStart = schemeEnd >= 0 ? schemeEnd + 3 : 0;
+        auto authorityEnd = s.indexOfChar (authorityStart, '/');
+        if (authorityEnd < 0)
+            authorityEnd = s.length();
+
+        const auto at = s.substring (authorityStart, authorityEnd).lastIndexOfChar ('@');
+        if (at < 0)
+            return s;
+
+        return s.substring (0, authorityStart) + s.substring (authorityStart + at + 1);
+    }
+
     void splitHostPort (const juce::String& in, juce::String& host, int& port, bool https)
     {
-        auto s = in.trim();
+        auto s = stripUserInfo (in);
 
         if (s.containsIgnoreCase ("://"))
             s = s.fromFirstOccurrenceOf ("://", false, false);
 
         s = s.upToFirstOccurrenceOf ("/", false, false);
-
-        if (s.containsChar ('@')) // user:pass@host - credentials come from the settings
-            s = s.fromLastOccurrenceOf ("@", false, false);
 
         port = https ? INTERNET_DEFAULT_HTTPS_PORT : INTERNET_DEFAULT_HTTP_PORT;
 
@@ -93,7 +106,11 @@ namespace axsynth::http
             host = s.substring (1).upToFirstOccurrenceOf ("]", false, false);
             const auto rest = s.fromFirstOccurrenceOf ("]", false, false);
             if (rest.startsWithChar (':') && rest.length() > 1)
-                port = rest.substring (1).getIntValue();
+            {
+                const auto p = rest.substring (1).getIntValue();
+                if (p > 0 && p < 65536)
+                    port = p;
+            }
             return;
         }
 
@@ -109,6 +126,34 @@ namespace axsynth::http
         {
             host = s;
         }
+    }
+
+    HostSpec parseHost (const juce::String& in)
+    {
+        HostSpec spec;
+        const auto s = stripUserInfo (in);
+
+        const bool forceHttps = s.startsWithIgnoreCase ("https://");
+        const bool forceHttp = s.startsWithIgnoreCase ("http://");
+
+        int portIfHttps = 0, portIfHttp = 0;
+        splitHostPort (s, spec.host, portIfHttps, true);
+        splitHostPort (s, spec.host, portIfHttp, false);
+
+        // Same result for both schemes means the port was given explicitly.
+        if (portIfHttps == portIfHttp)
+            spec.port = portIfHttps;
+
+        if (forceHttps)
+            spec.allowHttp = false;
+        else if (forceHttp)
+            spec.allowHttps = false;
+        else if (spec.port == INTERNET_DEFAULT_HTTPS_PORT)
+            spec.allowHttp = false;
+        else if (spec.port == INTERNET_DEFAULT_HTTP_PORT)
+            spec.allowHttps = false;
+
+        return spec;
     }
 
     static juce::String queryHeaderString (HINTERNET req, DWORD info)
@@ -210,14 +255,15 @@ namespace axsynth::http
         DWORD autologon = WINHTTP_AUTOLOGON_SECURITY_LEVEL_HIGH;
         WinHttpSetOption (req, WINHTTP_OPTION_AUTOLOGON_POLICY, &autologon, sizeof (autologon));
 
-        juce::String headers;
-        if (auth == AuthMode::basic)
-        {
-            const auto userPass = (user + ":" + password).toStdString();
-            headers = "Authorization: Basic " + juce::Base64::toBase64 (userPass.data(), userPass.size()) + "\r\n";
-        }
+        // Never follow redirects: a redirect could carry the request (and, after a
+        // challenge, the credentials) to another host or from HTTPS to HTTP.
+        DWORD noRedirects = WINHTTP_DISABLE_REDIRECTS;
+        WinHttpSetOption (req, WINHTTP_OPTION_DISABLE_FEATURE, &noRedirects, sizeof (noRedirects));
 
-        bool digestSent = false, certRetried = false;
+        const DWORD wantedScheme = auth == AuthMode::basic  ? WINHTTP_AUTH_SCHEME_BASIC
+                                 : auth == AuthMode::digest ? WINHTTP_AUTH_SCHEME_DIGEST
+                                                            : 0;
+        bool credentialsSet = false, certRetried = false;
 
         for (int attempt = 0; attempt < 4; ++attempt)
         {
@@ -227,10 +273,7 @@ namespace axsynth::http
                 return r;
             }
 
-            BOOL ok = WinHttpSendRequest (req,
-                                          headers.isEmpty() ? WINHTTP_NO_ADDITIONAL_HEADERS : headers.toWideCharPointer(),
-                                          headers.isEmpty() ? 0 : (DWORD) -1L,
-                                          WINHTTP_NO_REQUEST_DATA, 0, 0, 0);
+            BOOL ok = WinHttpSendRequest (req, WINHTTP_NO_ADDITIONAL_HEADERS, 0, WINHTTP_NO_REQUEST_DATA, 0, 0, 0);
             if (ok)
                 ok = WinHttpReceiveResponse (req, nullptr);
 
@@ -264,15 +307,18 @@ namespace axsynth::http
 
             r.status = (int) status;
 
-            if (status == 401 && auth == AuthMode::digest && ! digestSent)
+            // Answer a challenge only with the scheme this cascade step stands for, and
+            // only if the server offered it: no Basic to a server that asked for Digest.
+            if (status == 401 && wantedScheme != 0 && ! credentialsSet)
             {
                 DWORD supported = 0, first = 0, target = 0;
                 if (WinHttpQueryAuthSchemes (req, &supported, &first, &target)
-                    && (supported & WINHTTP_AUTH_SCHEME_DIGEST) != 0
-                    && WinHttpSetCredentials (req, target, WINHTTP_AUTH_SCHEME_DIGEST,
+                    && (supported & wantedScheme) != 0
+                    && WinHttpSetCredentials (req, target, wantedScheme,
                                               user.toWideCharPointer(), password.toWideCharPointer(), nullptr))
                 {
-                    digestSent = true;
+                    credentialsSet = true;
+                    r.credentialsSent = true;
                     continue;
                 }
             }

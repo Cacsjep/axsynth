@@ -8,12 +8,12 @@
 namespace axsynth::test
 {
     // Tiny HTTP/1.1 server on 127.0.0.1 (random port) that mimics an Axis camera:
-    // Basic or Digest (MD5, qop=auth) auth, param.cgi, MJPEG stream. TLS client hellos
+    // Basic, Digest (MD5, qop=auth) or both (like a real Axis on plain HTTP), param.cgi, MJPEG stream. TLS client hellos
     // are rejected immediately (connection closed) so HTTPS attempts fail fast.
     class MockCameraServer
     {
     public:
-        enum class Auth { none, basic, digest };
+        enum class Auth { none, basic, digest, both };
         enum class StreamMode { frames, noImage, hang };
 
         struct Config
@@ -28,6 +28,8 @@ namespace axsynth::test
             std::vector<juce::MemoryBlock> jpegs;
             int frameIntervalMs = 40;
             bool hangAll = false;            // read requests, never answer
+            int streamStatus = 200;          // e.g. 403 / 400 / 500 to test the error mapping
+            int paramStatus = 200;           // param.cgi status for authorised requests (e.g. 403)
         };
 
         explicit MockCameraServer (Config);
@@ -35,6 +37,8 @@ namespace axsynth::test
 
         int getPort() const noexcept { return port; }
         juce::StringArray getRequestLog() const;   // "GET <path>" per request
+        // "<path> <scheme>" per request, scheme = "Basic" / "Digest" / "-" (no Authorization header)
+        juce::StringArray getAuthLog() const;
         int getTlsRejects() const noexcept { return tlsRejects.load(); }
         int getStreamsServed() const noexcept { return streamsServed.load(); }
         void dropConnections();                    // ends all running streams
@@ -52,7 +56,7 @@ namespace axsynth::test
         int port = 0;
         std::unique_ptr<Listener> listener;
         mutable juce::CriticalSection logLock;
-        juce::StringArray log;
+        juce::StringArray log, authLog;
         std::atomic<int> tlsRejects { 0 }, streamsServed { 0 }, dropGeneration { 0 };
     };
 }

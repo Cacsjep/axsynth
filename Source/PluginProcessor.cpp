@@ -15,6 +15,13 @@ namespace axsynth
             return std::copysign (knee + room * std::tanh ((a - knee) / room), x);
         }
 
+        // Parameter read that survives NaN/inf from a corrupt state or host.
+        inline float readParam (const std::atomic<float>* p, float lo, float hi, float fallback) noexcept
+        {
+            const float v = p->load (std::memory_order_relaxed);
+            return std::isfinite (v) ? juce::jlimit (lo, hi, v) : fallback;
+        }
+
         inline float dbToGain (float db) noexcept
         {
             return db <= params::outputMinDb + 0.001f ? 0.0f : juce::Decibels::decibelsToGain (db);
@@ -60,15 +67,15 @@ namespace axsynth
         reader.prepare (sr);
 
         constexpr double smoothSec = 0.010;
-        sPosition.reset (sr, smoothSec);  sPosition.setCurrentAndTargetValue (pPosition->load());
-        sLfoAmount.reset (sr, smoothSec); sLfoAmount.setCurrentAndTargetValue (pLfoAmount->load());
-        sResonance.reset (sr, smoothSec); sResonance.setCurrentAndTargetValue (pResonance->load());
-        sGain.reset (sr, smoothSec);      sGain.setCurrentAndTargetValue (dbToGain (pOutput->load()));
-        sCutoff.reset (sr, smoothSec);    sCutoff.setCurrentAndTargetValue (pCutoff->load());
+        sPosition.reset (sr, smoothSec);  sPosition.setCurrentAndTargetValue (readParam (pPosition, 0.0f, 1.0f, 0.5f));
+        sLfoAmount.reset (sr, smoothSec); sLfoAmount.setCurrentAndTargetValue (readParam (pLfoAmount, 0.0f, 1.0f, 0.0f));
+        sResonance.reset (sr, smoothSec); sResonance.setCurrentAndTargetValue (readParam (pResonance, 0.0f, 1.0f, 0.1f));
+        sGain.reset (sr, smoothSec);      sGain.setCurrentAndTargetValue (dbToGain (readParam (pOutput, params::outputMinDb, params::outputMaxDb, 0.0f)));
+        sCutoff.reset (sr, smoothSec);    sCutoff.setCurrentAndTargetValue (readParam (pCutoff, 20.0f, 20000.0f, 8000.0f));
+        sModWheel.reset (sr, smoothSec);  sModWheel.setCurrentAndTargetValue (0.0f);
 
         lfoPhase = 0.0;
         pitchBend = 0.0f;
-        modWheel = 0.0f;
         outputPeak = 0.0f;
     }
 
@@ -80,15 +87,22 @@ namespace axsynth
     void AxSynthProcessor::handleMidi (const juce::MidiMessage& m)
     {
         if (m.isNoteOn())
-            synth.noteOn (m.getNoteNumber(), m.getFloatVelocity(), pAttack->load(), pRelease->load());
+            synth.noteOn (m.getNoteNumber(), m.getFloatVelocity(), attackSec, releaseSec);
         else if (m.isNoteOff())
             synth.noteOff (m.getNoteNumber());
-        else if (m.isAllNotesOff() || m.isAllSoundOff())
-            synth.allNotesOff();
+        else if (m.isAllSoundOff())
+            synth.reset();                       // CC120: silence at once
+        else if (m.isAllNotesOff())
+            synth.allNotesOff();                 // CC123: release
+        else if (m.isResetAllControllers())
+        {
+            pitchBend = 0.0f;                    // CC121
+            sModWheel.setTargetValue (0.0f);
+        }
         else if (m.isPitchWheel())
             pitchBend = (float) (m.getPitchWheelValue() - 8192) / 8192.0f;
         else if (m.isControllerOfType (1))
-            modWheel = (float) m.getControllerValue() / 127.0f;
+            sModWheel.setTargetValue ((float) m.getControllerValue() / 127.0f);
     }
 
     void AxSynthProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midi)
@@ -98,28 +112,49 @@ namespace axsynth
         const int numSamples = buffer.getNumSamples();
         const int numChannels = buffer.getNumChannels();
 
-        sPosition.setTargetValue (pPosition->load());
-        sLfoAmount.setTargetValue (pLfoAmount->load());
-        sResonance.setTargetValue (pResonance->load());
-        sCutoff.setTargetValue (juce::jlimit (20.0f, 20000.0f, pCutoff->load()));
-        sGain.setTargetValue (dbToGain (pOutput->load()));
-        synth.setEnvelopeTimes (pAttack->load(), pRelease->load());
+        sPosition.setTargetValue (readParam (pPosition, 0.0f, 1.0f, 0.5f));
+        sLfoAmount.setTargetValue (readParam (pLfoAmount, 0.0f, 1.0f, 0.0f));
+        sResonance.setTargetValue (readParam (pResonance, 0.0f, 1.0f, 0.1f));
+        sCutoff.setTargetValue (readParam (pCutoff, 20.0f, 20000.0f, 8000.0f));
+        sGain.setTargetValue (dbToGain (readParam (pOutput, params::outputMinDb, params::outputMaxDb, 0.0f)));
+        attackSec  = readParam (pAttack, 0.001f, 5.0f, 0.010f);
+        releaseSec = readParam (pRelease, 0.005f, 10.0f, 0.300f);
+        lfoRateHz  = readParam (pLfoRate, 0.05f, 20.0f, 0.5f);
+        synth.setEnvelopeTimes (attackSec, releaseSec);
 
-        // LFO: free-running or host-synced.
-        lfoSyncActive = pLfoSync->load() > 0.5f;
-        lfoSyncQuarters = params::syncQuarters[juce::jlimit (0, params::syncNames.size() - 1, (int) pLfoRateSync->load())];
+        // LFO: free-running or host-synced. Bar divisions follow the host's time signature.
+        lfoSyncActive = readParam (pLfoSync, 0.0f, 1.0f, 0.0f) > 0.5f;
+        const int division = juce::jlimit (0, params::syncNames.size() - 1,
+                                           (int) readParam (pLfoRateSync, 0.0f, 16.0f, (float) params::syncDefaultIndex));
         double bpm = 120.0;
+        double barQuarters = 4.0;
+        juce::Optional<juce::AudioPlayHead::PositionInfo> transport;
         if (auto* ph = getPlayHead())
+            transport = ph->getPosition();
+
+        if (transport.hasValue())
         {
-            if (auto pos = ph->getPosition())
+            if (auto b = transport->getBpm(); b && std::isfinite (*b))
+                bpm = juce::jlimit (1.0, 1000.0, *b);
+            if (auto ts = transport->getTimeSignature(); ts && ts->numerator > 0 && ts->denominator > 0)
+                barQuarters = 4.0 * ts->numerator / ts->denominator;
+        }
+
+        const double bars = params::syncBars[division];
+        lfoSyncQuarters = bars > 0.0 ? bars * barQuarters : params::syncQuarters[division];
+
+        if (lfoSyncActive && transport.hasValue() && transport->getIsPlaying())
+        {
+            if (auto ppq = transport->getPpqPosition(); ppq && std::isfinite (*ppq))
             {
-                if (auto b = pos->getBpm()) bpm = juce::jmax (1.0, *b);
-                if (lfoSyncActive && pos->getIsPlaying())
-                    if (auto ppq = pos->getPpqPosition())
-                    {
-                        const double cycles = *ppq / lfoSyncQuarters;
-                        lfoPhase = cycles - std::floor (cycles);
-                    }
+                double cycles = *ppq / lfoSyncQuarters;
+                // Bar divisions count from the last bar start, so cycles line up with bars.
+                if (auto barStart = transport->getPpqPositionOfLastBarStart(); bars > 0.0 && barStart && std::isfinite (*barStart))
+                {
+                    const double barIndex = std::round (*barStart / barQuarters);
+                    cycles = (barIndex + (*ppq - *barStart) / barQuarters) / bars;
+                }
+                lfoPhase = cycles - std::floor (cycles);
             }
         }
         lfoSamplesPerQuarter = sampleRate * 60.0 / bpm;
@@ -152,7 +187,9 @@ namespace axsynth
         reader.update();
 
         const double lfoInc = lfoSyncActive ? 1.0 / (lfoSamplesPerQuarter * lfoSyncQuarters)
-                                            : (double) pLfoRate->load() / sampleRate;
+                                            : (double) lfoRateHz / sampleRate;
+        if (! std::isfinite (lfoPhase) || lfoPhase < 0.0)
+            lfoPhase = 0.0;
         const float nyquistLimit = (float) (0.45 * sampleRate);
         float posEff = 0.5f;
 
@@ -162,7 +199,7 @@ namespace axsynth
             lfoPhase += lfoInc;
             if (lfoPhase >= 1.0) lfoPhase -= 1.0;
 
-            posEff = juce::jlimit (0.0f, 1.0f, sPosition.getNextValue() + sLfoAmount.getNextValue() * lfo + modWheel);
+            posEff = juce::jlimit (0.0f, 1.0f, sPosition.getNextValue() + sLfoAmount.getNextValue() * lfo + sModWheel.getNextValue());
             controls.position[i] = posEff;
 
             const float fc = juce::jmin (sCutoff.getNextValue(), nyquistLimit);
@@ -199,7 +236,7 @@ namespace axsynth
         juce::ValueTree cam ("Camera");
         cam.setProperty ("host", s.host, nullptr);
         cam.setProperty ("user", s.user, nullptr);
-        cam.setProperty ("password", dpapiProtect (s.password), nullptr);
+        cam.setProperty ("password", passwordForState (s), nullptr);
         cam.setProperty ("streamPath", s.streamPath, nullptr);
         cam.setProperty ("scheme", s.scheme, nullptr);
         cam.setProperty ("auth", s.auth, nullptr);
@@ -230,30 +267,48 @@ namespace axsynth
 
         const auto cam = state.getChildWithName ("Camera");
         const auto rect = state.getChildWithName ("Rect");
-        state.removeChild (cam, nullptr);
-        state.removeChild (rect, nullptr);
+
+        // Keep only parameter children; replace values a corrupt state made non-finite.
+        for (int i = state.getNumChildren(); --i >= 0;)
+        {
+            auto child = state.getChild (i);
+            if (child.hasType ("Camera") || child.hasType ("Rect"))
+            {
+                state.removeChild (i, nullptr);
+                continue;
+            }
+
+            if (auto* p = apvts.getParameter (child["id"].toString()))
+                if (! std::isfinite ((double) child["value"]))
+                    child.setProperty ("value", p->convertFrom0to1 (p->getDefaultValue()), nullptr);
+        }
         apvts.replaceState (state);
 
+        auto r = WavetableEngine::defaultRect();
         if (rect.isValid())
-            engine.setRect ({ (float) rect["x"], (float) rect["y"], (float) rect["w"], (float) rect["h"] });
+            r = { (float) rect["x"], (float) rect["y"], (float) rect["w"], (float) rect["h"] };
+        engine.setRect (r);
 
         if (cam.isValid())
         {
             CameraSettings s;
             s.host       = cam["host"].toString();
             s.user       = cam["user"].toString();
-            s.password   = dpapiUnprotect (cam["password"].toString());
             s.streamPath = cam.getProperty ("streamPath", CameraSettings::defaultStreamPath()).toString();
             s.scheme     = cam["scheme"].toString();
             s.auth       = cam["auth"].toString();
             s.resolution = cam["resolution"].toString();
+            passwordFromState (s, cam["password"].toString()); // keeps the blob if not decryptable here
 
             const auto old = camera.getSettings();
             const bool changed = old.host != s.host || old.user != s.user || old.password != s.password
                               || old.streamPath != s.streamPath;
             camera.setSettings (s);
 
-            if (s.hasCredentials() && (changed || camera.getStatus() == CameraConnector::Status::idle))
+            if (! s.hasCredentials())
+                camera.disconnect();             // restored "no camera": stop any old stream
+            else if (changed || camera.getStatus() == CameraConnector::Status::idle
+                             || camera.getStatus() == CameraConnector::Status::failed)
                 camera.connect (false);
         }
     }

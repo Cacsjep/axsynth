@@ -1,6 +1,6 @@
 # Manual acceptance test
 
-Run before every release with the MSI from the release workflow (the dry run artifact), on a clean Windows 10/11 machine. A release needs every box checked in both DAWs. Record the result in the sign-off table at the bottom.
+Run before every release with the MSI from a release workflow dry run of the commit you will tag, on a clean Windows 10/11 machine. After publishing, install the published MSI once and repeat the Install section. A release needs every box checked in both DAWs. Record the result in the sign-off table at the bottom.
 
 Requirements: an Axis camera reachable on the network, with its IP, user and password.
 
@@ -18,6 +18,7 @@ Requirements: an Axis camera reachable on the network, with its IP, user and pas
 - [ ] Wrong password: a short one-line German error message, no crash, no hang.
 - [ ] Drag a rectangle over the image; the sound follows the image content while notes play.
 - [ ] Position, LFO, Cutoff, Resonance, Attack, Release, Output respond and can be automated.
+- [ ] Click a knob, then use the computer keyboard (typing keyboard, transport keys): FL Studio gets the keys, not the plugin.
 - [ ] Save the project, close FL Studio completely, restart it, open the project.
 - [ ] The camera reconnects by itself and the rectangle is in the same place.
 - [ ] Unplug the camera network cable while playing: audio keeps running, the plugin reconnects when the cable is back.

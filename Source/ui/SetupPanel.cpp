@@ -18,10 +18,13 @@ namespace axsynth
             te->setIndents (8, 7);
             te->setSelectAllWhenFocused (true);
             te->onReturnKey = [this] { connect(); };
+            te->onEscapeKey = [te] { te->giveAwayKeyboardFocus(); };
             addAndMakeVisible (te);
         }
         password.setPasswordCharacter ((juce::juce_wchar) 0x2022);
 
+        setMouseClickGrabsKeyboardFocus (false);
+        connectButton.setWantsKeyboardFocus (false);
         connectButton.setButtonText ("Verbinden");
         connectButton.onClick = [this] { connect(); };
         addAndMakeVisible (connectButton);
@@ -69,7 +72,13 @@ namespace axsynth
                                      password.getText(), streamPath.getText().trim());
         if (! s.hasCredentials())
         {
-            host.grabKeyboardFocus();
+            // Focus the first empty field.
+            for (auto* te : { &host, &user, &password })
+                if (te->getText().trim().isEmpty())
+                {
+                    te->grabKeyboardFocus();
+                    break;
+                }
             return;
         }
 

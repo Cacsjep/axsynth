@@ -18,6 +18,9 @@ namespace axsynth
         void paint (juce::Graphics&) override;
         void mouseDown (const juce::MouseEvent&) override;
         void mouseDrag (const juce::MouseEvent&) override;
+        void mouseDoubleClick (const juce::MouseEvent&) override;
+        void startedDragging() override  { dragActive = true; }
+        void stoppedDragging() override  { dragActive = false; }
 
         static constexpr float startAngle = juce::MathConstants<float>::pi * (7.0f / 6.0f);  // 7 o'clock
         static constexpr float endAngle   = juce::MathConstants<float>::pi * (17.0f / 6.0f); // 5 o'clock
@@ -26,6 +29,7 @@ namespace axsynth
         double dragProportion = 0.0;
         juce::Point<float> lastDragPos;
         bool ignoreDrag = false;
+        bool dragActive = false; // true only inside a host change gesture
     };
 
     // Knob (48 px) with caps label below, bound to an APVTS parameter.

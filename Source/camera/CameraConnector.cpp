@@ -2,18 +2,24 @@
 #include "MjpegParser.h"
 #include "TripleBuffer.h"
 #include "WinHttpClient.h"
+#include <algorithm>
+#include <memory>
 #include <mutex>
+#include <thread>
+#include <vector>
 
 namespace axsynth
 {
     namespace
     {
-        constexpr int requestTimeoutMs = 5000;   // connect / receive timeout per request
-        constexpr int firstFrameTimeoutMs = 5000; // "connected but no image"
+        constexpr int requestTimeoutMs = 5000;      // connect / receive timeout per request
+        constexpr int reachabilityDeadlineMs = 5000; // "Kamera nicht erreichbar" after at most this long
+        constexpr int firstFrameTimeoutMs = 5000;   // "connected but no image"
         constexpr int frameStallTimeoutMs = 10000;
         constexpr int minBackoffMs = 1000;
         constexpr int maxBackoffMs = 30000;
 
+        const char* const probePath = "/";
         const char* const resolutionQuery = "/axis-cgi/param.cgi?action=list&group=Properties.Image.Resolution";
         const char* const sensorQuery = "/axis-cgi/param.cgi?action=list&group=ImageSource.I0.Sensor";
 
@@ -27,19 +33,31 @@ namespace axsynth
             bool operator== (const Combo& o) const { return https == o.https && digest == o.digest; }
         };
 
-        enum class AttemptResult { streamedThenLost, cancelled, unreachable, nameNotResolved, unauthorized, notFound, noImage };
+        enum class AttemptResult
+        {
+            streamedThenLost, cancelled, unreachable, nameNotResolved,
+            authNotOffered,   // 401, but the server does not offer this cascade step's scheme
+            unauthorized,     // 401 after sending credentials, or 403
+            notFound,         // a real 404
+            httpError,        // any other non-2xx answer (400, 3xx, 5xx, ...)
+            noImage
+        };
 
-        int rank (ConnectFailure f)
+        // Internal failure classes, ordered by how much they tell the user (higher wins).
+        enum class Failure { unreachable = 0, authNotOffered, httpError, unauthorized, notFound, noImage };
+
+        ConnectFailure toPublic (Failure f)
         {
             switch (f)
             {
-                case ConnectFailure::noImage:      return 4;
-                case ConnectFailure::notFound:     return 3;
-                case ConnectFailure::unauthorized: return 2;
-                case ConnectFailure::unreachable:  return 1;
-                case ConnectFailure::none:         break;
+                case Failure::unreachable:  return ConnectFailure::unreachable;
+                case Failure::authNotOffered: // no variant could even send the credentials
+                case Failure::unauthorized: return ConnectFailure::unauthorized;
+                case Failure::httpError:    // the server answered but refused the stream request
+                case Failure::notFound:     return ConnectFailure::notFound;
+                case Failure::noImage:      return ConnectFailure::noImage;
             }
-            return 0;
+            return ConnectFailure::unreachable;
         }
 
         bool sameTarget (const CameraSettings& a, const CameraSettings& b)
@@ -78,6 +96,11 @@ namespace axsynth
             if (t == "4:3") return 43;
             return 0;
         }
+
+        bool saneAspect (int w, int h)
+        {
+            return w > 0 && h > 0 && w <= 4 * h && h <= 4 * w;
+        }
     }
 
     // ==========================================================================
@@ -93,7 +116,7 @@ namespace axsynth
         CameraSettings settings;
         juce::String error;
 
-        std::mutex controlMutex; // serialises start/stop
+        std::mutex controlMutex; // serialises start/stop and the status changes they make
         bool userInitiated = false;
 
         http::Canceller canceller;
@@ -115,7 +138,7 @@ namespace axsynth
             {
                 if (user)
                 {
-                    setError (errorMessageFor (ConnectFailure::unreachable, s.host));
+                    setError (errorMessageFor (s.host.isEmpty() ? ConnectFailure::unreachable : ConnectFailure::unauthorized, s.host));
                     owner.status = Status::failed;
                 }
                 else
@@ -132,10 +155,13 @@ namespace axsynth
             startThread();
         }
 
-        void stop()
+        void stop (bool setIdle = false)
         {
             const std::lock_guard<std::mutex> lg (controlMutex);
             stopLocked();
+
+            if (setIdle)
+                owner.status = Status::idle;
         }
 
         void stopLocked()
@@ -143,7 +169,13 @@ namespace axsynth
             signalThreadShouldExit();
             canceller.cancel();
             wakeEvent.signal();
-            stopThread (5000);
+
+            // Wait without a timeout: every blocking point of the network thread is
+            // cancellable (WinHTTP handles are closed by the canceller, probe threads are
+            // cancelled and joined, the backoff wait is woken) and JPEG decoding is bounded
+            // by MjpegParser::isDecodableSize, so the thread exits within milliseconds.
+            // A timeout would end in TerminateThread, which can leave the heap locked.
+            stopThread (-1);
         }
 
         CameraSettings getSettings() const
@@ -182,8 +214,10 @@ namespace axsynth
                     user = false;
                     backoff = minBackoffMs;
                 }
-                else if (user)
+                else if (user || failure == ConnectFailure::unauthorized)
                 {
+                    // Silent mode gives up on wrong credentials too: retrying forever would
+                    // only pile up failed logins on the camera.
                     setError (errorMessageFor (failure, snapshot.host));
                     owner.status = Status::failed;
                     return;
@@ -198,10 +232,100 @@ namespace axsynth
             }
         }
 
+        // Sends one unauthenticated request per allowed scheme in parallel. A scheme that
+        // answers with any HTTP status is reachable. Waiting stops when the first scheme of
+        // the cascade order has answered, when all probes are done, or at the overall
+        // reachability deadline. Schemes still pending when waiting stopped early (because
+        // a preferred scheme answered) count as "unknown" and stay in the cascade.
+        enum class Reach { unknown, reachable, unreachable };
+
+        void probeSchemes (const juce::String& host, const std::vector<bool>& schemeOrder, Reach& https, Reach& http)
+        {
+            struct Probe
+            {
+                bool useHttps = false;
+                http::Canceller canceller;
+                std::atomic<int> state { 0 }; // 0 pending, 1 answered, 2 failed
+                std::thread thread;
+            };
+
+            juce::WaitableEvent anyDone;
+            std::vector<std::unique_ptr<Probe>> probes;
+
+            for (const bool useHttps : schemeOrder)
+            {
+                auto p = std::make_unique<Probe>();
+                p->useHttps = useHttps;
+                auto* raw = p.get();
+
+                p->thread = std::thread ([raw, host, &anyDone]
+                {
+                    http::Response r;
+                    {
+                        http::Client client (raw->canceller, raw->useHttps, host, requestTimeoutMs);
+                        r = client.get (probePath, http::AuthMode::none, {}, {});
+                    }
+                    raw->state = r.outcome == http::Outcome::ok ? 1 : 2;
+                    anyDone.signal();
+                });
+
+                probes.push_back (std::move (p));
+            }
+
+            const auto deadline = juce::Time::getMillisecondCounter() + (juce::uint32) reachabilityDeadlineMs;
+
+            for (;;)
+            {
+                bool allDone = true, preferredAnswered = false, preferredPending = false;
+
+                for (const auto& p : probes)
+                {
+                    const auto st = p->state.load();
+                    allDone = allDone && st != 0;
+
+                    if (! preferredPending && ! preferredAnswered)
+                    {
+                        if (st == 1) preferredAnswered = true;
+                        else if (st == 0) preferredPending = true;
+                    }
+                }
+
+                if (allDone || preferredAnswered || shouldStop() || juce::Time::getMillisecondCounter() >= deadline)
+                    break;
+
+                anyDone.wait (20);
+            }
+
+            const bool deadlinePassed = juce::Time::getMillisecondCounter() >= deadline;
+
+            // Snapshot before cancelling: a probe we cancel while pending must not count as
+            // a real transport failure unless the deadline is what stopped it.
+            std::vector<int> states;
+            for (const auto& p : probes)
+                states.push_back (p->state.load());
+
+            for (auto& p : probes)
+                p->canceller.cancel();
+
+            for (size_t i = 0; i < probes.size(); ++i)
+            {
+                probes[i]->thread.join();
+
+                const auto reach = states[i] == 1 ? Reach::reachable
+                                 : states[i] == 2 ? Reach::unreachable
+                                 : deadlinePassed ? Reach::unreachable
+                                                  : Reach::unknown;
+
+                (probes[i]->useHttps ? https : http) = reach;
+            }
+        }
+
         // Runs the cascade (remembered combo first). Streams on success until the
         // connection drops (streamed = true). Otherwise returns the best failure.
         ConnectFailure connectAndStream (const CameraSettings& s, bool& streamed)
         {
+            const auto spec = http::parseHost (s.host);
+
             const std::vector<Combo> cascade { { true, true }, { true, false }, { false, true }, { false, false } };
             std::vector<Combo> order;
 
@@ -213,8 +337,28 @@ namespace axsynth
                 if (std::find (order.begin(), order.end(), c) == order.end())
                     order.push_back (c);
 
-            bool skipHttps = false, skipHttp = false;
-            ConnectFailure best = ConnectFailure::unreachable;
+            order.erase (std::remove_if (order.begin(), order.end(), [&] (const Combo& c)
+                                         { return c.https ? ! spec.allowHttps : ! spec.allowHttp; }),
+                         order.end());
+
+            if (order.empty() || spec.host.isEmpty())
+                return ConnectFailure::unreachable;
+
+            // ---- reachability: one deadline across both schemes ----
+            std::vector<bool> schemeOrder;
+            for (const auto& c : order)
+                if (std::find (schemeOrder.begin(), schemeOrder.end(), c.https) == schemeOrder.end())
+                    schemeOrder.push_back (c.https);
+
+            Reach httpsReach = Reach::unreachable, httpReach = Reach::unreachable;
+            probeSchemes (s.host, schemeOrder, httpsReach, httpReach);
+
+            if (shouldStop())
+                return ConnectFailure::none;
+
+            bool skipHttps = httpsReach == Reach::unreachable;
+            bool skipHttp = httpReach == Reach::unreachable;
+            Failure best = Failure::unreachable;
 
             for (size_t i = 0; i < order.size(); ++i)
             {
@@ -228,7 +372,7 @@ namespace axsynth
                 const bool useRememberedResolution = hasRemembered && i == 0 && s.resolution.isNotEmpty();
                 const auto r = attempt (s, c, useRememberedResolution, streamed);
 
-                ConnectFailure f = ConnectFailure::unreachable;
+                Failure f = Failure::unreachable;
 
                 switch (r)
                 {
@@ -245,19 +389,21 @@ namespace axsynth
                         (c.https ? skipHttps : skipHttp) = true;
                         break;
 
-                    case AttemptResult::unauthorized: f = ConnectFailure::unauthorized; break;
-                    case AttemptResult::notFound:     f = ConnectFailure::notFound; break;
-                    case AttemptResult::noImage:      f = ConnectFailure::noImage; break;
+                    case AttemptResult::authNotOffered: f = Failure::authNotOffered; break;
+                    case AttemptResult::unauthorized: f = Failure::unauthorized; break;
+                    case AttemptResult::notFound:     f = Failure::notFound; break;
+                    case AttemptResult::httpError:    f = Failure::httpError; break;
+                    case AttemptResult::noImage:      f = Failure::noImage; break;
                 }
 
-                if (rank (f) > rank (best))
+                if ((int) f > (int) best)
                     best = f;
 
-                if (f == ConnectFailure::noImage)
+                if (f == Failure::noImage)
                     break; // authenticated and got a stream; another variant won't produce images either
             }
 
-            return best;
+            return toPublic (best);
         }
 
         static AttemptResult fromTransport (http::Outcome o)
@@ -289,8 +435,8 @@ namespace axsynth
                 if (r.outcome != http::Outcome::ok)
                     return fromTransport (r.outcome);
 
-                if (r.status == 401 || r.status == 403)
-                    return AttemptResult::unauthorized;
+                if (r.status == 401)
+                    return r.credentialsSent ? AttemptResult::unauthorized : AttemptResult::authNotOffered;
 
                 if (r.status == 200)
                 {
@@ -311,7 +457,8 @@ namespace axsynth
 
                     resolution = pickResolution (list, aspect);
                 }
-                // anything else (404, ...): not an Axis camera, open the stream without resolution
+                // Anything else (403 for a user without parameter rights, 404 on a
+                // non-Axis source, ...): open the stream path as entered.
             }
 
             const auto path = applyResolution (s.streamPath.isNotEmpty() ? s.streamPath : CameraSettings::defaultStreamPath(),
@@ -321,11 +468,17 @@ namespace axsynth
             if (r.outcome != http::Outcome::ok)
                 return fromTransport (r.outcome);
 
-            if (r.status == 401 || r.status == 403)
+            if (r.status == 401)
+                return r.credentialsSent ? AttemptResult::unauthorized : AttemptResult::authNotOffered;
+
+            if (r.status == 403)
                 return AttemptResult::unauthorized;
 
-            if (r.status < 200 || r.status >= 300)
+            if (r.status == 404)
                 return AttemptResult::notFound;
+
+            if (r.status < 200 || r.status >= 300)
+                return AttemptResult::httpError;
 
             return stream (client, s, combo, resolution, r.contentType, streamed);
         }
@@ -341,10 +494,18 @@ namespace axsynth
             MjpegParser parser (MjpegParser::boundaryFromContentType (contentType),
                                 [&] (const juce::uint8* data, size_t size)
             {
+                // Never let a declared size reach the decoder unchecked.
+                if (! MjpegParser::isDecodableSize (data, size))
+                    return;
+
                 juce::MemoryInputStream in (data, size, false);
                 auto img = jpeg.decodeImage (in);
                 if (! img.isValid())
                     return;
+
+                // JUCE 8 decodes into a native (Direct2D) image whose internals are not safe
+                // to share between threads; hand out a plain software copy instead.
+                img = juce::SoftwareImageType().convert (img);
 
                 frames.writeSlot() = std::move (img);
                 frames.publish();
@@ -417,14 +578,16 @@ namespace axsynth
 
     CameraConnector::~CameraConnector()
     {
-        impl->stop();
-        status = Status::idle;
+        impl->stop (true);
     }
 
     void CameraConnector::setSettings (const CameraSettings& s)
     {
+        auto copy = s;
+        copy.host = http::stripUserInfo (s.host);
+
         const juce::ScopedLock sl (impl->lock);
-        impl->settings = s;
+        impl->settings = copy;
     }
 
     CameraSettings CameraConnector::getSettings() const
@@ -439,8 +602,7 @@ namespace axsynth
 
     void CameraConnector::disconnect()
     {
-        impl->stop();
-        status = Status::idle;
+        impl->stop (true);
     }
 
     juce::String CameraConnector::getErrorMessage() const
@@ -473,7 +635,9 @@ namespace axsynth
 
         const auto preferred = aspectCode (sensorAspect);
 
-        auto pick = [&] (bool onlyPreferred) -> juce::String
+        enum class Filter { preferredAspect, standardAspect, anySaneAspect };
+
+        auto pick = [&] (Filter filter) -> juce::String
         {
             juce::String best;
             juce::int64 bestArea = 0;
@@ -483,7 +647,11 @@ namespace axsynth
                 const auto sz = parseSize (t);
                 const auto a = aspectCode (sz.w, sz.h);
 
-                if (a == 0 || sz.w < 320 || (onlyPreferred && a != preferred))
+                if (sz.w < 320 || ! saneAspect (sz.w, sz.h))
+                    continue;
+                if (filter == Filter::preferredAspect && a != preferred)
+                    continue;
+                if (filter == Filter::standardAspect && a == 0)
                     continue;
 
                 const auto area = (juce::int64) sz.w * sz.h;
@@ -497,14 +665,20 @@ namespace axsynth
         };
 
         if (preferred != 0)
-            if (auto r = pick (true); r.isNotEmpty())
+            if (auto r = pick (Filter::preferredAspect); r.isNotEmpty())
                 return r;
 
-        return pick (false);
+        if (auto r = pick (Filter::standardAspect); r.isNotEmpty())
+            return r;
+
+        return pick (Filter::anySaneAspect);
     }
 
     juce::String applyResolution (const juce::String& streamPath, const juce::String& resolution)
     {
+        if (resolution.isEmpty())
+            return streamPath; // nothing to replace it with: keep what the user entered
+
         const auto q = streamPath.indexOfChar ('?');
         const auto base = q < 0 ? streamPath : streamPath.substring (0, q);
         const auto query = q < 0 ? juce::String() : streamPath.substring (q + 1);
@@ -520,7 +694,7 @@ namespace axsynth
             if (! params[i].upToFirstOccurrenceOf ("=", false, false).trim().equalsIgnoreCase ("resolution"))
                 continue;
 
-            if (resolution.isNotEmpty() && ! replaced)
+            if (! replaced)
             {
                 params.set (i, "resolution=" + resolution);
                 replaced = true;
@@ -531,17 +705,17 @@ namespace axsynth
             }
         }
 
-        if (resolution.isNotEmpty() && ! replaced)
+        if (! replaced)
             params.add ("resolution=" + resolution);
 
-        return params.isEmpty() ? base : base + "?" + params.joinIntoString ("&");
+        return base + "?" + params.joinIntoString ("&");
     }
 
     juce::String errorMessageFor (ConnectFailure f, const juce::String& host)
     {
         switch (f)
         {
-            case ConnectFailure::unreachable:  return "Kamera unter " + host + " nicht erreichbar";
+            case ConnectFailure::unreachable:  return "Kamera unter " + http::stripUserInfo (host) + " nicht erreichbar";
             case ConnectFailure::unauthorized: return "Benutzername oder Passwort falsch";
             case ConnectFailure::notFound:     return "Stream-Pfad nicht gefunden";
             case ConnectFailure::noImage:

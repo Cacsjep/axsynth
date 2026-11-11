@@ -16,12 +16,15 @@ on:
 
 env:
   PLUGINVAL_VERSION: v1.0.4
+  PLUGINVAL_SHA256: c08e61ce3b96db41636f8ec7e76f4c7e2c13ebdac7fa1b5a1f52b4f32ec715ab
   VST3SDK_TAG: v3.8.1_build_84
+  VST3SDK_COMMIT: 3cdf9ca5d1f5b1b21e0a86832aa4abe55607bd96
 
 jobs:
   build:
     name: Build and gates (Windows x64)
-    runs-on: windows-latest
+    # Pinned image: the spec asks for MSVC 2022 (windows-latest moved to VS 2026).
+    runs-on: windows-2022
     timeout-minutes: 90
     outputs:
       artifact: ${{ steps.names.outputs.artifact }}
@@ -33,9 +36,14 @@ jobs:
         with:
           submodules: recursive
 
-      - uses: ilammy/msvc-dev-cmd@v1
-        with:
-          arch: x64
+      - name: MSVC 2022 x64 environment
+        run: |
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio/Installer/vswhere.exe'
+          $vs = & $vswhere -latest -products * -version '[17.0,18.0)' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if (-not $vs) { Write-Host '::error::Visual Studio 2022 with C++ tools not found'; exit 1 }
+          cmd /c "`"$vs\VC\Auxiliary\Build\vcvars64.bat`" >nul && set" | ForEach-Object {
+            if ($_ -match '^([^=]+)=(.*)$') { "$($Matches[1])=$($Matches[2])" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV }
+          }
 
       - name: Artifact name
         id: names
@@ -66,6 +74,8 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force tools/pluginval | Out-Null
           Invoke-WebRequest "https://github.com/Tracktion/pluginval/releases/download/$env:PLUGINVAL_VERSION/pluginval_Windows.zip" -OutFile tools/pluginval.zip
+          $hash = (Get-FileHash -Algorithm SHA256 tools/pluginval.zip).Hash.ToLower()
+          if ($hash -ne $env:PLUGINVAL_SHA256) { Write-Host "::error::pluginval checksum mismatch ($hash)"; exit 1 }
           Expand-Archive tools/pluginval.zip -DestinationPath tools/pluginval -Force
           tools/pluginval/pluginval.exe --version
 
@@ -74,13 +84,15 @@ jobs:
         uses: actions/cache@v6
         with:
           path: tools/vst3-validator
-          key: vst3-validator-${{ env.VST3SDK_TAG }}-${{ runner.os }}-v1
+          key: vst3-validator-${{ env.VST3SDK_COMMIT }}-windows-2022-v2
 
       - name: Build VST3 validator (${{ env.VST3SDK_TAG }})
         if: steps.validator-cache.outputs.cache-hit != 'true'
         run: |
           git clone --depth 1 --branch $env:VST3SDK_TAG --recurse-submodules --shallow-submodules https://github.com/steinbergmedia/vst3sdk.git "$env:RUNNER_TEMP/vst3sdk"
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          $head = git -C "$env:RUNNER_TEMP/vst3sdk" rev-parse HEAD
+          if ($head -ne $env:VST3SDK_COMMIT) { Write-Host "::error::vst3sdk tag moved ($head)"; exit 1 }
           cmake -S "$env:RUNNER_TEMP/vst3sdk" -B "$env:RUNNER_TEMP/vst3sdk-build" -G Ninja -DCMAKE_BUILD_TYPE=Release `
             -DSMTG_ENABLE_VST3_PLUGIN_EXAMPLES=OFF -DSMTG_ENABLE_VST3_HOSTING_EXAMPLES=OFF -DSMTG_ENABLE_VSTGUI_SUPPORT=OFF
           if ($LASTEXITCODE) { exit $LASTEXITCODE }

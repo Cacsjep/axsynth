@@ -29,6 +29,16 @@ namespace axsynth
         static constexpr size_t maxBufferedBytes = 8 * 1024 * 1024;
         static constexpr size_t maxHeaderBytes = 16 * 1024;
 
+        // Reads width/height from the first SOFn segment without decoding anything.
+        // Returns false if the data is not a JPEG or ends before a SOF segment.
+        static bool jpegDimensions (const juce::uint8* data, size_t size, int& width, int& height) noexcept;
+
+        // Decode guard: a hostile or broken source can declare e.g. 65000 x 65000 in a
+        // few hundred bytes, which would make the decoder allocate gigabytes.
+        static constexpr int maxJpegDimension = 4096;
+        static constexpr size_t maxJpegBytes = 4 * 1024 * 1024;
+        static bool isDecodableSize (const juce::uint8* data, size_t size) noexcept;
+
     private:
         enum class State { seekBoundary, boundaryLine, headers, bodyLength, bodyScan, scanSoi, scanEoi };
 

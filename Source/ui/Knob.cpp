@@ -10,6 +10,10 @@ namespace axsynth
         setRepaintsOnMouseActivity (true);
         setScrollWheelEnabled (true);
         setPopupMenuEnabled (false);
+
+        // Clicking a knob must not take keyboard focus away from the host.
+        setWantsKeyboardFocus (false);
+        setMouseClickGrabsKeyboardFocus (false);
     }
 
     void KnobSlider::mouseDown (const juce::MouseEvent& e)
@@ -27,9 +31,18 @@ namespace axsynth
         juce::Slider::mouseDown (e); // starts the gesture
     }
 
+    void KnobSlider::mouseDoubleClick (const juce::MouseEvent& e)
+    {
+        // A fast double right-click (sync toggle) must not reset the value.
+        if (e.mods.isPopupMenu())
+            return;
+        juce::Slider::mouseDoubleClick (e);
+    }
+
     void KnobSlider::mouseDrag (const juce::MouseEvent& e)
     {
-        if (ignoreDrag || ! isEnabled())
+        // Only drag inside a gesture started by Slider::mouseDown (not after Alt+click reset).
+        if (ignoreDrag || ! dragActive || ! isEnabled())
             return;
 
         // Incremental, so toggling Shift mid-drag never jumps.
@@ -91,6 +104,7 @@ namespace axsynth
     Knob::Knob (juce::AudioProcessorValueTreeState& s, const juce::String& paramID, const juce::String& l)
         : state (s), label (l)
     {
+        setMouseClickGrabsKeyboardFocus (false);
         addAndMakeVisible (slider);
         bindTo (paramID);
     }
@@ -102,7 +116,9 @@ namespace axsynth
 
     void Knob::bindTo (const juce::String& paramID)
     {
-        if (paramID == boundID)
+        // Never swap attachments in the middle of a drag: it would leave the
+        // host's change gesture open. The caller retries on its next refresh.
+        if (paramID == boundID || slider.isMouseButtonDown())
             return;
         attachment.reset();
         boundID = paramID;

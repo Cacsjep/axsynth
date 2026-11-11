@@ -69,13 +69,18 @@ namespace axsynth
 
         lfoRate.getSlider().onRightClick = [this] { toggleLfoSync(); };
 
+        // Clicks on the plugin must not move keyboard focus (keys belong to the host).
+        setMouseClickGrabsKeyboardFocus (false);
+        content.setMouseClickGrabsKeyboardFocus (false);
+        cameraView.setMouseClickGrabsKeyboardFocus (false);
+        stack.setMouseClickGrabsKeyboardFocus (false);
+        gear.setWantsKeyboardFocus (false);
+
         gear.onClick = [this] { setSetupPanelVisible (! setupPanel.isVisible()); };
 
-        setupPanel.onConnect = [this]
-        {
-            closeSetupOnImage = true;
-            imageCountWhenArmed = cameraView.getImageCount();
-        };
+        // Close on the first frame of the new connection, counted at the camera after
+        // connect() restarted it, so a frame from the previous stream cannot close it.
+        setupPanel.onConnect = [this] { armCloseOnImage(); };
 
         layoutContent();
 
@@ -83,8 +88,10 @@ namespace axsynth
         if (! processor.getCamera().getSettings().hasCredentials())
         {
             setSetupPanelVisible (true);
-            closeSetupOnImage = true;
+            armCloseOnImage();
         }
+
+        processor.takeOutputPeak(); // drop the peak collected while the editor was closed
 
         auto* c = getConstrainer();
         c->setFixedAspectRatio ((double) theme::baseWidth / (double) theme::baseHeight);
@@ -146,11 +153,20 @@ namespace axsynth
             setupPanel.loadSettings();
             setupPanel.updateStatus();
             closeSetupOnImage = false;
-            imageCountWhenArmed = cameraView.getImageCount();
+        }
+        else if (setupPanel.hasKeyboardFocus (true))
+        {
+            juce::Component::unfocusAllComponents();
         }
 
         setupPanel.setVisible (shouldShow);
         gear.setToggleState (shouldShow, juce::dontSendNotification);
+    }
+
+    void AxSynthEditor::armCloseOnImage()
+    {
+        closeSetupOnImage = true;
+        frameCountWhenArmed = processor.getCamera().getFrameCount();
     }
 
     void AxSynthEditor::toggleLfoSync()
@@ -181,7 +197,9 @@ namespace axsynth
         if (setupPanel.isVisible())
         {
             setupPanel.updateStatus();
-            if (closeSetupOnImage && cameraView.getImageCount() != imageCountWhenArmed)
+            const auto& cam = processor.getCamera();
+            if (closeSetupOnImage && cam.getStatus() == CameraConnector::Status::streaming
+                && cam.getFrameCount() != frameCountWhenArmed)
                 setSetupPanelVisible (false);
         }
     }

@@ -94,7 +94,9 @@ namespace axsynth::builder
     {
         for (int f = 0; f < numFrames; ++f)
         {
-            float scale = 1.0f;
+            // One scale per frame across all mips: removing harmonics can raise the
+            // peak, and clipping a mip would put back harmonics above its limit.
+            float peak = 0.0f;
 
             for (int m = 0; m < numMips; ++m)
             {
@@ -114,19 +116,19 @@ namespace axsynth::builder
                     mean += work[(size_t) i];
                 mean /= tableSize;
 
-                float peak = 0.0f;
                 for (int i = 0; i < tableSize; ++i)
                 {
                     dst[i] = work[(size_t) i] - (float) mean;
                     peak = juce::jmax (peak, std::abs (dst[i]));
                 }
+            }
 
-                if (m == 0)
-                    scale = peak > 1.0e-9f ? 1.0f / peak : 0.0f;
-
+            const float scale = peak > 1.0e-9f ? 1.0f / peak : 0.0f;
+            for (int m = 0; m < numMips; ++m)
+            {
+                float* dst = out.frame (m, f);
                 for (int i = 0; i < tableSize; ++i)
-                    dst[i] = juce::jlimit (-1.0f, 1.0f, dst[i] * scale);
-
+                    dst[i] *= scale;
                 dst[tableSize] = dst[0];
             }
         }

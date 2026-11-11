@@ -44,8 +44,7 @@ set(AXSYNTH_MODULES
 set(AXSYNTH_DEFINES
     JUCE_WEB_BROWSER=0
     JUCE_USE_CURL=0
-    JUCE_VST3_CAN_REPLACE_VST2=0
-    JUCE_DISPLAY_SPLASH_SCREEN=0)
+    JUCE_VST3_CAN_REPLACE_VST2=0)
 
 set(AXSYNTH_SYSLIBS winhttp crypt32)
 
@@ -57,6 +56,12 @@ target_link_libraries(AxSynth
     PUBLIC juce::juce_recommended_config_flags
            juce::juce_recommended_lto_flags
            juce::juce_recommended_warning_flags)
+
+# Spec: no compiler warnings at /W4. Enforced, so a new warning fails the build.
+option(AXSYNTH_WARNINGS_AS_ERRORS "Treat compiler warnings as errors" ON)
+if(AXSYNTH_WARNINGS_AS_ERRORS AND MSVC)
+    target_compile_options(AxSynth PRIVATE /WX)
+endif()
 
 if(AXSYNTH_BUILD_TESTS)
     add_subdirectory(Tests)

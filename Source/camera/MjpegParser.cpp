@@ -34,6 +34,65 @@ namespace axsynth
         return value;
     }
 
+    bool MjpegParser::jpegDimensions (const juce::uint8* d, size_t n, int& width, int& height) noexcept
+    {
+        if (d == nullptr || n < 4 || d[0] != 0xFF || d[1] != 0xD8)
+            return false;
+
+        size_t i = 2;
+
+        while (i + 2 <= n)
+        {
+            if (d[i] != 0xFF)
+                return false;
+
+            const auto marker = d[i + 1];
+            if (marker == 0xFF) // fill byte
+            {
+                ++i;
+                continue;
+            }
+
+            i += 2;
+
+            if (marker == 0x01 || (marker >= 0xD0 && marker <= 0xD8)) // standalone markers
+                continue;
+
+            if (marker == 0xD9 || marker == 0xDA) // EOI or start of scan before any SOF
+                return false;
+
+            if (i + 2 > n)
+                return false;
+
+            const auto length = (size_t) ((d[i] << 8) | d[i + 1]);
+            if (length < 2)
+                return false;
+
+            const bool isSof = marker >= 0xC0 && marker <= 0xCF && marker != 0xC4 && marker != 0xC8 && marker != 0xCC;
+            if (isSof)
+            {
+                if (length < 7 || i + 7 > n)
+                    return false;
+
+                height = (d[i + 3] << 8) | d[i + 4];
+                width  = (d[i + 5] << 8) | d[i + 6];
+                return true;
+            }
+
+            i += length;
+        }
+
+        return false;
+    }
+
+    bool MjpegParser::isDecodableSize (const juce::uint8* data, size_t size) noexcept
+    {
+        int w = 0, h = 0;
+        return size <= maxJpegBytes
+            && jpegDimensions (data, size, w, h)
+            && w > 0 && h > 0 && w <= maxJpegDimension && h <= maxJpegDimension;
+    }
+
     void MjpegParser::push (const void* data, size_t size)
     {
         if (size == 0)

@@ -163,7 +163,8 @@ namespace axsynth
                 expect (hasVariedPixels (snap), "snapshot is a single colour");
                 writeSnapshot (snap, "editor_setup.png");
 
-                // Camera-like image -> setup closes on the first image, overlay drawn over it.
+                // Camera-like image (injected, not a camera stream): overlay drawn over it.
+                // The panel only auto-closes on a frame of a real connection (live test).
                 proc.getEngine().injectImageForTesting (makeTestImage());
                 setParam (proc, params::position, 14.0f / 31.0f);
                 juce::Thread::sleep (800);
@@ -179,7 +180,9 @@ namespace axsynth
                 }
 
                 editor->refresh();
-                expect (! editor->isSetupPanelVisible(), "setup panel should close on the first image");
+                expect (editor->isSetupPanelVisible(), "an injected image is not a camera connection");
+                editor->setSetupPanelVisible (false);
+                expect (! editor->isSetupPanelVisible());
 
                 snap = editor->createComponentSnapshot (editor->getLocalBounds());
                 expect (hasVariedPixels (snap));
@@ -229,19 +232,101 @@ namespace axsynth
                 expectWithinAbsoluteError (r.getHeight(), rect.getHeight(), 1.0e-5f);
             }
 
+            beginTest ("State keeps camera settings, password encrypted");
+            {
+                juce::MemoryBlock state;
+                {
+                    AxSynthProcessor a;
+                    CameraSettings cs;
+                    cs.host = "192.0.2.10"; cs.user = "operator"; cs.password = "s3cret-pw"; cs.streamPath = "/custom";
+                    a.getCamera().setSettings (cs);
+                    a.getStateInformation (state);
+
+                    juce::MemoryBlock again;
+                    a.getStateInformation (again);
+                    expect (again == state, "saving twice must give identical state (no spurious 'modified')");
+                }
+
+                expect (! state.toString().contains ("s3cret-pw"), "password stored in plain text");
+
+                AxSynthProcessor b;
+                b.setStateInformation (state.getData(), (int) state.getSize());
+                const auto s = b.getCamera().getSettings();
+                expectEquals (s.host, juce::String ("192.0.2.10"));
+                expectEquals (s.user, juce::String ("operator"));
+                expectEquals (s.password, juce::String ("s3cret-pw"));
+                expectEquals (s.streamPath, juce::String ("/custom"));
+                b.getCamera().disconnect();
+            }
+
+            beginTest ("Corrupt state: NaN parameter values are replaced, audio stays finite");
+            {
+                juce::MemoryBlock state;
+                {
+                    AxSynthProcessor a;
+                    a.getStateInformation (state);
+                }
+                auto xml = juce::AudioProcessor::getXmlFromBinary (state.getData(), (int) state.getSize());
+                expect (xml != nullptr);
+                if (xml == nullptr)
+                    return;
+                for (auto* p : xml->getChildIterator())
+                    if (p->getStringAttribute ("id") == params::cutoff || p->getStringAttribute ("id") == params::lfoRate)
+                        p->setAttribute ("value", "nan");
+                juce::MemoryBlock bad;
+                juce::AudioProcessor::copyXmlToBinary (*xml, bad);
+
+                AxSynthProcessor b;
+                b.prepareToPlay (48000.0, 512);
+                b.setStateInformation (bad.getData(), (int) bad.getSize());
+                expect (std::isfinite (b.getState().getRawParameterValue (params::cutoff)->load()));
+
+                // A NaN that reaches the processor anyway (host) must not poison the output.
+                b.getState().getRawParameterValue (params::lfoRate)->store (std::numeric_limits<float>::quiet_NaN());
+                juce::AudioBuffer<float> buffer (2, 512);
+                juce::MidiBuffer midi;
+                midi.addEvent (juce::MidiMessage::noteOn (1, 60, (juce::uint8) 100), 0);
+                bool finite = true;
+                float mag = 0.0f;
+                for (int i = 0; i < 20; ++i)
+                {
+                    buffer.clear();
+                    b.processBlock (buffer, midi);
+                    midi.clear();
+                    for (int k = 0; k < 512; ++k)
+                        finite = finite && std::isfinite (buffer.getSample (0, k));
+                    mag = juce::jmax (mag, buffer.getMagnitude (0, 0, 512));
+                }
+                expect (finite, "output contains NaN/inf");
+                expectGreaterThan (mag, 0.01f);
+                b.releaseResources();
+            }
+
+            beginTest ("State without Rect child resets the rectangle to the default");
+            {
+                AxSynthProcessor a;
+                a.getEngine().setRect ({ 0.1f, 0.1f, 0.3f, 0.3f });
+                juce::ValueTree t ("AxSynth");
+                auto xml = t.createXml();
+                juce::MemoryBlock mb;
+                juce::AudioProcessor::copyXmlToBinary (*xml, mb);
+                a.setStateInformation (mb.getData(), (int) mb.getSize());
+                expect (a.getEngine().getRect() == WavetableEngine::defaultRect());
+            }
+
             runLiveEndToEnd();
 
             beginTest ("Setup: changed identity clears learned connection details");
             {
                 CameraSettings cur;
-                cur.host = "10.0.0.48"; cur.user = "root"; cur.password = "pw";
+                cur.host = "192.0.2.10"; cur.user = "root"; cur.password = "pw";
                 cur.scheme = "https"; cur.auth = "digest"; cur.resolution = "320x180";
 
-                auto same = SetupPanel::makeSettings (cur, "10.0.0.48", "root", "pw", "/x");
+                auto same = SetupPanel::makeSettings (cur, "192.0.2.10", "root", "pw", "/x");
                 expectEquals (same.scheme, juce::String ("https"));
                 expectEquals (same.streamPath, juce::String ("/x"));
 
-                auto changed = SetupPanel::makeSettings (cur, "10.0.0.49", "root", "pw", "/x");
+                auto changed = SetupPanel::makeSettings (cur, "192.0.2.11", "root", "pw", "/x");
                 expect (changed.scheme.isEmpty() && changed.auth.isEmpty() && changed.resolution.isEmpty());
             }
         }

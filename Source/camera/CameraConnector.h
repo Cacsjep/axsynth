@@ -11,7 +11,7 @@ namespace axsynth
     // last successful connect (empty = unknown, run the full cascade).
     struct CameraSettings
     {
-        juce::String host;        // "10.0.0.48" or "host:port"
+        juce::String host;        // "192.0.2.10" or "host:port"
         juce::String user;
         juce::String password;    // plain text in memory; DPAPI-encrypted only in plugin state
         juce::String streamPath { defaultStreamPath() };
@@ -19,7 +19,14 @@ namespace axsynth
         juce::String auth;        // "digest" | "basic" | ""
         juce::String resolution;  // e.g. "320x180" | ""
 
-        bool hasCredentials() const { return host.isNotEmpty(); }
+        // DPAPI blob from a plugin state that could not be decrypted here (other
+        // Windows user or machine). Written back unchanged while password is empty,
+        // so opening a project elsewhere does not destroy the stored password.
+        juce::String undecryptablePassword;
+
+        // Host, user and password are all needed: an empty password usually means it
+        // could not be decrypted, and the setup panel should open instead of a connect.
+        bool hasCredentials() const { return host.isNotEmpty() && user.isNotEmpty() && password.isNotEmpty(); }
         static juce::String defaultStreamPath() { return "/axis-cgi/mjpg/video.cgi?resolution=640x360&fps=25"; }
     };
 
@@ -41,12 +48,15 @@ namespace axsynth
         CameraConnector();
         ~CameraConnector();
 
-        // Message thread or any non-audio thread.
+        // Message thread or any non-audio thread. Credentials typed into the host field
+        // ("user:pass@host") are removed from the stored host.
         void setSettings (const CameraSettings&);
         CameraSettings getSettings() const;     // includes learned scheme/auth/resolution
 
         // userInitiated = true: one attempt sequence, on failure status=failed with message.
-        // userInitiated = false (plugin load with stored settings): silent retry with backoff forever.
+        // userInitiated = false (plugin load with stored settings): silent retry with backoff,
+        // except after "wrong user or password", which ends in status=failed with the message
+        // (retrying would only repeat failed logins against the camera).
         void connect (bool userInitiated);
         void disconnect();
 
@@ -72,10 +82,12 @@ namespace axsynth
 
     // Parses "Properties.Image.Resolution=1920x1080,...,320x180,..." and picks the smallest
     // resolution with 16:9 or 4:3 aspect and width >= 320. If sensorAspect ("16:9"/"4:3")
-    // is given, that aspect is preferred. Returns "" if nothing suitable.
+    // is given, that aspect is preferred. If no 16:9 or 4:3 entry fits, the smallest entry
+    // of any sane aspect (between 4:1 and 1:4) with width >= 320 is used. "" if nothing fits.
     juce::String pickResolution (const juce::String& paramCgiResponse, const juce::String& sensorAspect = {});
 
-    // Sets/replaces the resolution query parameter in a stream path. Empty resolution removes it.
+    // Sets/replaces the resolution query parameter in a stream path. An empty resolution
+    // leaves the path exactly as the user entered it.
     juce::String applyResolution (const juce::String& streamPath, const juce::String& resolution);
 
     enum class ConnectFailure { none, unreachable, unauthorized, notFound, noImage };
@@ -83,7 +95,19 @@ namespace axsynth
     // One line, plain German, no codes (spec section 4).
     juce::String errorMessageFor (ConnectFailure, const juce::String& host);
 
-    // Windows DPAPI (CurrentUser). Returns base64; empty on failure.
+    // Windows DPAPI (CurrentUser). Returns base64; empty on failure. The same password
+    // gives the same blob for the lifetime of the process (cached), so repeated
+    // getStateInformation calls produce identical bytes.
     juce::String dpapiProtect (const juce::String& plain);
+    // Empty on failure.
     juce::String dpapiUnprotect (const juce::String& base64);
+    // false if the blob is not decryptable here (other user/machine, corrupt). An empty
+    // blob is not an error (true, empty password).
+    bool dpapiTryUnprotect (const juce::String& base64, juce::String& plainOut);
+
+    // Plugin state helpers. passwordForState: DPAPI blob of s.password, or the kept
+    // undecryptable blob if the password is empty. passwordFromState: fills s.password,
+    // or on failure leaves it empty and keeps the blob in s.undecryptablePassword.
+    juce::String passwordForState (const CameraSettings&);
+    void passwordFromState (CameraSettings&, const juce::String& blob);
 }

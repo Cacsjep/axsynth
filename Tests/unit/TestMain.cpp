@@ -22,6 +22,13 @@ int main (int argc, char** argv)
         const auto* r = runner.getResult (i);
         failures += r->failures;
         tests += r->passes + r->failures;
+
+        if (r->failures > 0)
+        {
+            std::printf ("FAILED: %s / %s (%d)\n", r->unitTestName.toRawUTF8(), r->subcategoryName.toRawUTF8(), r->failures);
+            for (const auto& m : r->messages)
+                std::printf ("    %s\n", m.toRawUTF8());
+        }
     }
 
     std::printf ("\n%d checks, %d failures\n", tests, failures);

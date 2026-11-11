@@ -53,7 +53,8 @@ namespace axsynth
         juce::Image lastImage;
         juce::uint32 lastRectVersion = 0;
 
-        std::atomic<float> rx { 0.2f }, ry { 0.2f }, rw { 0.6f }, rh { 0.6f };
+        mutable juce::SpinLock rectLock;
+        juce::Rectangle<float> rect { 0.2f, 0.2f, 0.6f, 0.6f };
         std::atomic<juce::uint32> rectVersion { 1 };
 
         mutable juce::SpinLock displayLock;
@@ -83,6 +84,8 @@ namespace axsynth
             const int idx = pool.takePending();
             if (idx < 0)
                 return;
+
+            numSwaps.fetch_add (1, std::memory_order_relaxed);
 
             if (current < 0)
             {
@@ -115,10 +118,13 @@ namespace axsynth
         const Wavetable* getPrevious() noexcept { return previous >= 0 ? &pool.get (previous) : nullptr; }
         float getFade() const noexcept { return fade; }
         float getFadeStep() const noexcept { return previous >= 0 ? fadeStep : 0.0f; }
+        // Tables taken from the pool so far (tests and diagnostics, any thread).
+        juce::uint32 getNumSwaps() const noexcept { return numSwaps.load (std::memory_order_relaxed); }
 
     private:
         WavetablePool& pool;
         int current = -1, previous = -1;
         float fade = 1.0f, fadeStep = 0.001f;
+        std::atomic<juce::uint32> numSwaps { 0 };
     };
 }
