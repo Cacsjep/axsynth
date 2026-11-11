@@ -2,8 +2,9 @@
 # sign (only if a certificate secret exists), compute SHA-256 sums and publish a
 # GitHub Release. Any failed gate stops the run before anything is published.
 #
-# Manual dry run (no tag, nothing published, outputs uploaded as an artifact):
+# Manual dry run (nothing published, outputs uploaded as a workflow artifact):
 #   gh workflow run release.yml --ref <branch> -f version=1.0.0 -f dry_run=true
+# (workflow_dispatch only works once this file exists on the default branch.)
 name: Release
 
 on:
@@ -77,7 +78,8 @@ jobs:
     env:
       VERSION: ${{ needs.prepare.outputs.version }}
       HAS_CERT: ${{ secrets.WINDOWS_CERT_PFX_BASE64 != '' }}
-      PUBLISH: ${{ github.event_name == 'push' || !inputs.dry_run }}
+      # Publish only for a tag ref; a manual run publishes only with dry_run=false on a tag.
+      PUBLISH: ${{ github.ref_type == 'tag' && (github.event_name == 'push' || !inputs.dry_run) }}
     steps:
       - uses: actions/checkout@v7
 
