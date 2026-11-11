@@ -46,6 +46,7 @@ namespace axsynth
         float getEffectivePosition() const noexcept { return effectivePosition.load(); }
         // Output peak (linear), read-and-decay by the UI.
         float getOutputPeak() const noexcept { return outputPeak.load(); }
+        float takeOutputPeak() noexcept { return outputPeak.exchange (0.0f); }
 
     private:
         void renderSubBlock (float* const* channels, int numChannels, int offset, int n);
