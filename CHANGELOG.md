@@ -4,7 +4,7 @@ All notable changes to AxSynth are documented here. The format follows [Keep a C
 
 ## [Unreleased]
 
-## [1.0.1]
+## [1.1.0]
 
 ### Changed
 
