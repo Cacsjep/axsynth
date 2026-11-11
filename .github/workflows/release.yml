@@ -122,9 +122,11 @@ jobs:
         run: |
           Compress-Archive -Path stage/AxSynth.vst3 -DestinationPath "dist/AxSynth-$env:VERSION-win64-vst3.zip"
           Push-Location dist
-          "AxSynth-$env:VERSION-win64.msi", "AxSynth-$env:VERSION-win64-vst3.zip" | ForEach-Object {
+          $sums = "AxSynth-$env:VERSION-win64.msi", "AxSynth-$env:VERSION-win64-vst3.zip" | ForEach-Object {
             "{0}  {1}" -f (Get-FileHash -Algorithm SHA256 -LiteralPath $_ -ErrorAction Stop).Hash.ToLower(), $_
-          } | Set-Content -Encoding ascii SHA256SUMS.txt
+          }
+          # LF line endings so `sha256sum -c` works on Linux/macOS/Git Bash.
+          [IO.File]::WriteAllText("$PWD/SHA256SUMS.txt", (($sums -join "`n") + "`n"))
           Get-Content SHA256SUMS.txt
           Pop-Location
 
