@@ -316,6 +316,17 @@ namespace axsynth
                 expect (a.getEngine().getRect() == WavetableEngine::defaultRect());
             }
 
+            beginTest ("State restore resets a bool parameter left at an in-between raw value");
+            {
+                AxSynthProcessor proc;
+                juce::MemoryBlock saved;
+                proc.getStateInformation (saved);                     // lfoSync = off (0)
+                auto* p = proc.getState().getParameter (params::lfoSync);
+                p->setValueNotifyingHost (0.46f);                     // still reads "off"
+                proc.setStateInformation (saved.getData(), (int) saved.getSize());
+                expectWithinAbsoluteError (p->getValue(), 0.0f, 1.0e-6f);
+            }
+
             beginTest ("Presets: names, apply sets listed values and resets the rest");
             {
                 AxSynthProcessor proc;

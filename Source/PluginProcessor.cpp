@@ -328,6 +328,17 @@ namespace axsynth
         }
         apvts.replaceState (state);
 
+        // replaceState skips parameters whose denormalised value already matches (a bool
+        // at raw 0.46 reads as "off" = saved "off"), leaving the raw value behind. Set
+        // every restored parameter explicitly so getValue() matches the saved state.
+        for (const auto& child : state)
+            if (auto* p = apvts.getParameter (child["id"].toString()))
+            {
+                const float norm = p->convertTo0to1 ((float) child["value"]);
+                if (std::isfinite (norm) && std::abs (p->getValue() - norm) > 1.0e-6f)
+                    p->setValueNotifyingHost (norm);
+            }
+
         auto r = WavetableEngine::defaultRect();
         if (rect.isValid())
             r = { (float) rect["x"], (float) rect["y"], (float) rect["w"], (float) rect["h"] };
