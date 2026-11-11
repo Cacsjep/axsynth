@@ -68,6 +68,8 @@ namespace axsynth
         std::atomic<float>* pCutoff {};
         std::atomic<float>* pResonance {};
         std::atomic<float>* pAttack {};
+        std::atomic<float>* pDecay {};
+        std::atomic<float>* pSustain {};
         std::atomic<float>* pRelease {};
         std::atomic<float>* pOutput {};
 
@@ -80,7 +82,8 @@ namespace axsynth
         bool lfoSyncActive = false;
         double lfoSyncQuarters = 1.0;
         float pitchBend = 0.0f;
-        float attackSec = 0.010f, releaseSec = 0.300f, lfoRateHz = 0.5f; // sanitised once per block
+        Envelope envelope;            // sanitised once per block
+        float lfoRateHz = 0.5f;
 
         std::atomic<float> effectivePosition { 0.5f };
         std::atomic<float> outputPeak { 0.0f };

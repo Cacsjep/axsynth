@@ -15,14 +15,16 @@ namespace axsynth
         }
     }
 
-    void Voice::setEnvelopeTimes (float attackSec, float releaseSec) noexcept
+    void Voice::setEnvelope (const Envelope& e) noexcept
     {
-        attackStep = 1.0f / juce::jmax (1.0f, attackSec * (float) sampleRate);
-        // release time = time to fall by 60 dB
-        releaseCoeff = std::exp (std::log (0.001f) / juce::jmax (1.0f, releaseSec * (float) sampleRate));
+        attackStep = 1.0f / juce::jmax (1.0f, e.attackSec * (float) sampleRate);
+        // decay / release time = time to cover 60 dB of the distance to the target
+        decayCoeff   = std::exp (std::log (0.001f) / juce::jmax (1.0f, e.decaySec * (float) sampleRate));
+        releaseCoeff = std::exp (std::log (0.001f) / juce::jmax (1.0f, e.releaseSec * (float) sampleRate));
+        sustainLevel = juce::jlimit (0.0f, 1.0f, e.sustain);
     }
 
-    void Voice::noteOn (int n, float velocity, juce::uint64 o, float attackSec, float releaseSec) noexcept
+    void Voice::noteOn (int n, float velocity, juce::uint64 o, const Envelope& e) noexcept
     {
         if (! active)
         {
@@ -36,7 +38,7 @@ namespace axsynth
         velocityGain = 0.2f + 0.8f * velocity;
         active = true;
         stage = Stage::attack;
-        setEnvelopeTimes (attackSec, releaseSec);
+        setEnvelope (e);
     }
 
     void Voice::noteOff() noexcept
@@ -58,14 +60,19 @@ namespace axsynth
 
         for (int i = 0; i < n; ++i)
         {
-            // Envelope: linear attack, exponential release; decay 0 ms, sustain 100 %.
+            // Envelope: linear attack, exponential decay to sustain, exponential release.
+            // The decay stage keeps tracking the sustain level, so moving Sustain while a
+            // note is held glides instead of jumping.
             switch (stage)
             {
                 case Stage::attack:
                     env += attackStep;
-                    if (env >= 1.0f) { env = 1.0f; stage = Stage::sustain; }
+                    if (env >= 1.0f) { env = 1.0f; stage = Stage::decay; }
                     break;
-                case Stage::sustain: break;
+                case Stage::decay:
+                    env = sustainLevel + (env - sustainLevel) * decayCoeff;
+                    if (sustainLevel <= 0.0f && env < 1.0e-4f) { kill(); return; }
+                    break;
                 case Stage::release:
                     env *= releaseCoeff;
                     if (env < 1.0e-4f) { kill(); return; }
@@ -109,7 +116,7 @@ namespace axsynth
         for (auto& v : voices) v.kill();
     }
 
-    void SynthEngine::noteOn (int note, float velocity, float attackSec, float releaseSec) noexcept
+    void SynthEngine::noteOn (int note, float velocity, const Envelope& e) noexcept
     {
         Voice* target = nullptr;
 
@@ -127,7 +134,7 @@ namespace axsynth
                 if (v.getOrder() < target->getOrder()) target = &v;
         }
 
-        target->noteOn (note, velocity, ++orderCounter, attackSec, releaseSec);
+        target->noteOn (note, velocity, ++orderCounter, e);
     }
 
     void SynthEngine::noteOff (int note) noexcept
@@ -142,9 +149,9 @@ namespace axsynth
         for (auto& v : voices) v.noteOff();
     }
 
-    void SynthEngine::setEnvelopeTimes (float attackSec, float releaseSec) noexcept
+    void SynthEngine::setEnvelope (const Envelope& e) noexcept
     {
-        for (auto& v : voices) v.setEnvelopeTimes (attackSec, releaseSec);
+        for (auto& v : voices) v.setEnvelope (e);
     }
 
     void SynthEngine::render (float* out, int n, const BlockControls& ctl, WavetableReader& reader, float pitchBendSemis) noexcept

@@ -24,6 +24,10 @@ namespace axsynth
         void mouseExit (const juce::MouseEvent&) override;
 
         bool hasImage() const noexcept { return image.isValid(); }
+
+        // Hides the rectangle and scanlines (while the setup panel covers the view).
+        void setRectVisible (bool shouldShow);
+        bool isRectVisible() const noexcept { return rectVisible; }
         // Number of distinct images seen so far.
         juce::uint64 getImageCount() const noexcept { return imageCount; }
 
@@ -40,6 +44,7 @@ namespace axsynth
         float imageAspect = 16.0f / 9.0f;
         juce::Rectangle<float> rect;     // normalised
         int activeLine = -1;
+        bool rectVisible = true;
         juce::uint64 imageCount = 0;
 
         Hit dragHit = Hit::none;

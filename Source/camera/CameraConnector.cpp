@@ -13,7 +13,7 @@ namespace axsynth
     namespace
     {
         constexpr int requestTimeoutMs = 5000;      // connect / receive timeout per request
-        constexpr int reachabilityDeadlineMs = 5000; // "Kamera nicht erreichbar" after at most this long
+        constexpr int reachabilityDeadlineMs = 2000; // "Kamera nicht erreichbar" after at most this long
         constexpr int firstFrameTimeoutMs = 5000;   // "connected but no image"
         constexpr int frameStallTimeoutMs = 10000;
         constexpr int minBackoffMs = 1000;

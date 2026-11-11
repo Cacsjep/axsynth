@@ -34,6 +34,7 @@ namespace axsynth
 
         bool isSetupPanelVisible() const { return setupPanel.isVisible(); }
         void setSetupPanelVisible (bool shouldShow);
+        bool isCameraRectVisible() const { return cameraView.isRectVisible(); }
 
     private:
         void timerCallback() override { refresh(); }
@@ -51,7 +52,7 @@ namespace axsynth
         GearButton gear;
         LevelMeter meter;
 
-        Knob position, lfoRate, lfoAmount, cutoff, resonance, attack, release, output;
+        Knob position, lfoRate, lfoAmount, cutoff, resonance, output, attack, decay, sustain, release;
 
         double lastRefreshMs = 0.0;
         bool closeSetupOnImage = false;

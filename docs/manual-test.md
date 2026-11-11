@@ -18,7 +18,7 @@ Requirements: an Axis camera reachable on the network, with its IP, user and pas
 - [ ] Gear icon, enter IP, user, password, click **Verbinden**: the camera image appears.
 - [ ] Wrong password: a short one-line German error message, no crash, no hang.
 - [ ] Drag a rectangle over the image; the sound follows the image content while notes play.
-- [ ] Position, LFO, Cutoff, Resonance, Attack, Release, Output respond and can be automated.
+- [ ] Position, LFO, Cutoff, Resonance, Output, Attack, Decay, Sustain, Release respond and can be automated.
 - [ ] Click a knob, then use the computer keyboard (typing keyboard, transport keys): FL Studio gets the keys, not the plugin.
 - [ ] Save the project, close FL Studio completely, restart it, open the project.
 - [ ] The camera reconnects by itself and the rectangle is in the same place.

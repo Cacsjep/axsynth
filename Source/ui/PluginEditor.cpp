@@ -8,7 +8,7 @@ namespace axsynth
         const juce::Rectangle<int> camera { 16, 16, 568, 588 };
         const juce::Rectangle<int> stack  { 608, 46, 376, 178 };
         const juce::Rectangle<int> gear   { 962, 14, 20, 20 };
-        constexpr int columns[] { 672, 796, 920 };
+        constexpr int columns[] { 655, 749, 843, 937 };
         constexpr int rows[]    { 298, 416, 534 };
         constexpr int meterW = 6, meterH = 58;
     }
@@ -51,9 +51,11 @@ namespace axsynth
           lfoAmount (p.getState(), params::lfoAmount, "LFO Amount"),
           cutoff    (p.getState(), params::cutoff,    "Cutoff"),
           resonance (p.getState(), params::resonance, "Resonance"),
+          output    (p.getState(), params::output,    "Output"),
           attack    (p.getState(), params::attack,    "Attack"),
-          release   (p.getState(), params::release,   "Release"),
-          output    (p.getState(), params::output,    "Output")
+          decay     (p.getState(), params::decay,     "Decay"),
+          sustain   (p.getState(), params::sustain,   "Sustain"),
+          release   (p.getState(), params::release,   "Release")
     {
         setLookAndFeel (&lookAndFeel);
         setOpaque (true);
@@ -64,7 +66,7 @@ namespace axsynth
         content.addAndMakeVisible (stack);
         content.addAndMakeVisible (gear);
         content.addAndMakeVisible (meter);
-        for (auto* k : { &position, &lfoRate, &lfoAmount, &cutoff, &resonance, &attack, &release, &output })
+        for (auto* k : { &position, &lfoRate, &lfoAmount, &cutoff, &resonance, &output, &attack, &decay, &sustain, &release })
             content.addAndMakeVisible (k);
 
         lfoRate.getSlider().onRightClick = [this] { toggleLfoSync(); };
@@ -118,18 +120,19 @@ namespace axsynth
         stack.setBounds (layout::stack);
         gear.setBounds (layout::gear);
 
-        Knob* grid[3][3] { { &position, &lfoRate, &lfoAmount },
-                           { &cutoff, &resonance, &attack },
-                           { &release, &output, nullptr } };
+        // Oscillator / LFO, filter / output (+ level meter), envelope.
+        Knob* grid[3][4] { { &position, &lfoRate, &lfoAmount, nullptr },
+                           { &cutoff, &resonance, &output, nullptr },
+                           { &attack, &decay, &sustain, &release } };
 
         for (int r = 0; r < 3; ++r)
-            for (int c = 0; c < 3; ++c)
+            for (int c = 0; c < 4; ++c)
                 if (auto* k = grid[r][c])
                     k->setBounds (layout::columns[c] - Knob::width / 2, layout::rows[r] - Knob::knobSize / 2,
                                   Knob::width, Knob::height);
 
         meter.setBounds (juce::Rectangle<int> (layout::meterW, layout::meterH)
-                             .withCentre ({ layout::columns[2], layout::rows[2] }));
+                             .withCentre ({ layout::columns[3], layout::rows[1] }));
     }
 
     void AxSynthEditor::resized()
@@ -160,6 +163,7 @@ namespace axsynth
         }
 
         setupPanel.setVisible (shouldShow);
+        cameraView.setRectVisible (! shouldShow); // no rectangle behind the login form
         gear.setToggleState (shouldShow, juce::dontSendNotification);
     }
 

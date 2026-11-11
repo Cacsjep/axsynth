@@ -340,7 +340,7 @@ public:
             Voice v;
             const double sr = 96000.0;
             v.prepare (sr);
-            v.noteOn (45, 1.0f, 1, 0.001f, 1.0f);   // 110 Hz -> 872.7 samples / period
+            v.noteOn (45, 1.0f, 1, Envelope { 0.001f, 0.3f, 1.0f, 1.0f });   // 110 Hz -> 872.7 samples / period
 
             std::vector<float> out (96000, 0.0f);
             for (int i = 0; i < (int) out.size(); i += 64)
@@ -361,13 +361,61 @@ public:
             expectLessThan (mag (330.0) / mag (110.0), 0.01);
         }
 
+        beginTest ("ADSR: attack, decay to sustain, release");
+        {
+            // Unfiltered, flat table: the output envelope is the ADSR (times velocity gain 1).
+            const double sr = 48000.0;
+            BlockControls flat {};
+            for (int i = 0; i < BlockControls::maxSamples; ++i)
+            {
+                flat.position[i] = 0.0f;
+                flat.filterG[i] = (float) std::tan (juce::MathConstants<double>::pi * 20000.0 / 96000.0);
+                flat.filterK[i] = 1.0f / 0.707f;
+            }
+
+            Voice v;
+            v.prepare (sr);
+            const Envelope e { 0.010f, 0.100f, 0.25f, 0.200f };
+            v.noteOn (69, 1.0f, 1, e);
+
+            auto peakOver = [&] (int samples)
+            {
+                float pk = 0.0f;
+                std::vector<float> buf ((size_t) samples, 0.0f);
+                for (int i = 0; i < samples; i += 64)
+                    v.render (buf.data() + i, juce::jmin (64, samples - i), flat, table.get(), nullptr, 1.0f, 0.0f, 0.0f);
+                for (auto x : buf) pk = juce::jmax (pk, std::abs (x));
+                return pk;
+            };
+
+            const float attackPeak = peakOver (960);              // 20 ms: attack done, decay started
+            expectGreaterThan (attackPeak, 0.8f);
+            peakOver (48000 - 960);                                // ~1 s: decay settled
+            const float sustained = peakOver (4800);
+            expectWithinAbsoluteError (sustained / attackPeak, 0.25f, 0.03f);
+
+            v.noteOff();
+            peakOver ((int) (0.2 * sr));                           // release time = -60 dB
+            const float released = peakOver (480);
+            expectLessThan (released, sustained * 0.0015f);
+
+            // Sustain 0: the voice ends by itself after the decay.
+            Voice w;
+            w.prepare (sr);
+            w.noteOn (69, 1.0f, 1, Envelope { 0.001f, 0.05f, 0.0f, 1.0f });
+            std::vector<float> buf (48000, 0.0f);
+            for (int i = 0; i < 48000; i += 64)
+                w.render (buf.data() + i, 64, flat, table.get(), nullptr, 1.0f, 0.0f, 0.0f);
+            expect (! w.isActive(), "sustain 0 voice should end after the decay");
+        }
+
         beginTest ("8 voices, oldest is stolen");
         {
             SynthEngine s;
             s.prepare (48000.0);
-            for (int n = 0; n < 8; ++n) s.noteOn (60 + n, 1.0f, 0.01f, 0.3f);
+            for (int n = 0; n < 8; ++n) s.noteOn (60 + n, 1.0f, Envelope {});
             expectEquals (s.getNumActiveVoices(), 8);
-            s.noteOn (80, 1.0f, 0.01f, 0.3f);
+            s.noteOn (80, 1.0f, Envelope {});
             expectEquals (s.getNumActiveVoices(), 8);
             // note 60 (oldest) was stolen: releasing it must not affect anything
             s.noteOff (60);

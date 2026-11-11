@@ -14,6 +14,15 @@ namespace axsynth
         float filterK[maxSamples];    // 1 / Q
     };
 
+    // ADSR settings. Decay and release times are the time to cover 60 dB of the distance.
+    struct Envelope
+    {
+        float attackSec = 0.010f;
+        float decaySec = 0.300f;
+        float sustain = 1.0f;      // 0..1
+        float releaseSec = 0.300f;
+    };
+
     // TPT state-variable filter, 12 dB/oct low-pass.
     struct SvfLowpass
     {
@@ -39,7 +48,7 @@ namespace axsynth
     public:
         void prepare (double sr) noexcept { sampleRate = sr; filter.reset(); }
 
-        void noteOn (int note, float velocity, juce::uint64 order, float attackSec, float releaseSec) noexcept;
+        void noteOn (int note, float velocity, juce::uint64 order, const Envelope&) noexcept;
         void noteOff() noexcept;
         void kill() noexcept { active = false; env = 0.0f; stage = Stage::idle; filter.reset(); }
 
@@ -48,7 +57,7 @@ namespace axsynth
         int getNote() const noexcept { return note; }
         juce::uint64 getOrder() const noexcept { return order; }
 
-        void setEnvelopeTimes (float attackSec, float releaseSec) noexcept;
+        void setEnvelope (const Envelope&) noexcept;
 
         // Adds into out[0..n). pitchBendSemis applies to all voices.
         void render (float* out, int n, const BlockControls& ctl,
@@ -56,7 +65,7 @@ namespace axsynth
                      float pitchBendSemis) noexcept;
 
     private:
-        enum class Stage { idle, attack, sustain, release };
+        enum class Stage { idle, attack, decay, release }; // decay settles into sustain
 
         double sampleRate = 44100.0;
         double phase = 0.0;
@@ -66,7 +75,7 @@ namespace axsynth
         bool active = false;
 
         Stage stage = Stage::idle;
-        float env = 0.0f, attackStep = 0.01f, releaseCoeff = 0.999f;
+        float env = 0.0f, attackStep = 0.01f, decayCoeff = 0.999f, sustainLevel = 1.0f, releaseCoeff = 0.999f;
         SvfLowpass filter;
     };
 
@@ -80,10 +89,10 @@ namespace axsynth
         void prepare (double sr) noexcept;
         void reset() noexcept;
 
-        void noteOn (int note, float velocity, float attackSec, float releaseSec) noexcept;
+        void noteOn (int note, float velocity, const Envelope&) noexcept;
         void noteOff (int note) noexcept;
         void allNotesOff() noexcept;
-        void setEnvelopeTimes (float attackSec, float releaseSec) noexcept;
+        void setEnvelope (const Envelope&) noexcept;
 
         void render (float* out, int n, const BlockControls& ctl, WavetableReader& reader, float pitchBendSemis) noexcept;
 

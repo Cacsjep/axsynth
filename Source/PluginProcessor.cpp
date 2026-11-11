@@ -42,6 +42,8 @@ namespace axsynth
         pCutoff      = apvts.getRawParameterValue (params::cutoff);
         pResonance   = apvts.getRawParameterValue (params::resonance);
         pAttack      = apvts.getRawParameterValue (params::attack);
+        pDecay       = apvts.getRawParameterValue (params::decay);
+        pSustain     = apvts.getRawParameterValue (params::sustain);
         pRelease     = apvts.getRawParameterValue (params::release);
         pOutput      = apvts.getRawParameterValue (params::output);
 
@@ -87,7 +89,7 @@ namespace axsynth
     void AxSynthProcessor::handleMidi (const juce::MidiMessage& m)
     {
         if (m.isNoteOn())
-            synth.noteOn (m.getNoteNumber(), m.getFloatVelocity(), attackSec, releaseSec);
+            synth.noteOn (m.getNoteNumber(), m.getFloatVelocity(), envelope);
         else if (m.isNoteOff())
             synth.noteOff (m.getNoteNumber());
         else if (m.isAllSoundOff())
@@ -117,10 +119,12 @@ namespace axsynth
         sResonance.setTargetValue (readParam (pResonance, 0.0f, 1.0f, 0.1f));
         sCutoff.setTargetValue (readParam (pCutoff, 20.0f, 20000.0f, 8000.0f));
         sGain.setTargetValue (dbToGain (readParam (pOutput, params::outputMinDb, params::outputMaxDb, 0.0f)));
-        attackSec  = readParam (pAttack, 0.001f, 5.0f, 0.010f);
-        releaseSec = readParam (pRelease, 0.005f, 10.0f, 0.300f);
+        envelope.attackSec  = readParam (pAttack, 0.001f, 5.0f, 0.010f);
+        envelope.decaySec   = readParam (pDecay, 0.005f, 10.0f, 0.300f);
+        envelope.sustain    = readParam (pSustain, 0.0f, 1.0f, 1.0f);
+        envelope.releaseSec = readParam (pRelease, 0.005f, 10.0f, 0.300f);
         lfoRateHz  = readParam (pLfoRate, 0.05f, 20.0f, 0.5f);
-        synth.setEnvelopeTimes (attackSec, releaseSec);
+        synth.setEnvelope (envelope);
 
         // LFO: free-running or host-synced. Bar divisions follow the host's time signature.
         lfoSyncActive = readParam (pLfoSync, 0.0f, 1.0f, 0.0f) > 0.5f;

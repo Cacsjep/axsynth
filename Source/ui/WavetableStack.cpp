@@ -61,26 +61,29 @@ namespace axsynth
 
     void WavetableStack::paint (juce::Graphics& g)
     {
-        // Back to front, fading with depth. Slot 0 (front) is reserved for the active frame.
+        // Frame f sits at depth f / (numFrames - 1): frame 1 in front, frame 32 at the back.
+        // Back to front, fading with depth.
         for (int f = numFrames - 1; f >= 0; --f)
         {
-            const float depth = (float) (f + 1) / (float) numFrames;
+            const float depth = (float) f / (float) (numFrames - 1);
             g.setColour (theme::text.withAlpha (0.45f - 0.38f * depth));
             g.strokePath (framePath (frames[(size_t) f].data(), depth), juce::PathStrokeType (1.0f));
         }
 
-        // Active frame, interpolated between neighbours, in front (spec 6).
-        const float pos = juce::jlimit (0.0f, 1.0f, position) * (float) (numFrames - 1);
-        const int f0 = juce::jlimit (0, numFrames - 1, (int) pos);
+        // Active frame, interpolated between neighbours, in full accent colour at its own
+        // depth, so it travels through the stack as Position (plus LFO) moves.
+        const float pos = juce::jlimit (0.0f, 1.0f, position);
+        const float framePos = pos * (float) (numFrames - 1);
+        const int f0 = juce::jlimit (0, numFrames - 1, (int) framePos);
         const int f1 = juce::jmin (f0 + 1, numFrames - 1);
-        const float t = pos - (float) f0;
+        const float t = framePos - (float) f0;
 
         std::array<float, WavetableEngine::displayPoints> active;
         for (size_t i = 0; i < active.size(); ++i)
             active[i] = frames[(size_t) f0][i] + t * (frames[(size_t) f1][i] - frames[(size_t) f0][i]);
 
         g.setColour (theme::accent);
-        g.strokePath (framePath (active.data(), 0.0f),
+        g.strokePath (framePath (active.data(), pos),
                       juce::PathStrokeType (2.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
     }
 }

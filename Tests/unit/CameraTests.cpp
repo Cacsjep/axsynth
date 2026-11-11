@@ -888,7 +888,7 @@ namespace axsynth::test
                 expect (td < 1000, "disconnect while receiving oversized frames took " + juce::String ((int) td) + " ms");
             }
 
-            beginTest ("black hole (listening, never answering) fails within ~5 s");
+            beginTest ("black hole (listening, never answering) fails within ~2 s");
             {
                 juce::StreamingSocket listener; // completes TCP handshakes in the backlog, never answers
                 expect (listener.createListener (0, "127.0.0.1"));
@@ -905,7 +905,7 @@ namespace axsynth::test
                 note ("  black hole cascade took " + juce::String ((int) dt) + " ms");
                 expect (cam.getStatus() == Status::failed);
                 expectEquals (cam.getErrorMessage(), "Kamera unter " + s.host + " nicht erreichbar");
-                expect (dt <= 6000, "black hole took " + juce::String ((int) dt) + " ms");
+                expect (dt <= 3000, "black hole took " + juce::String ((int) dt) + " ms");
             }
 
             beginTest ("silent mode stops on wrong credentials");

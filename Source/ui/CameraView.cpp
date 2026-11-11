@@ -69,6 +69,14 @@ namespace axsynth
                  n.getWidth() * a.getWidth(), n.getHeight() * a.getHeight() };
     }
 
+    void CameraView::setRectVisible (bool shouldShow)
+    {
+        if (rectVisible == shouldShow)
+            return;
+        rectVisible = shouldShow;
+        repaint();
+    }
+
     void CameraView::paint (juce::Graphics& g)
     {
         g.fillAll (theme::cameraBg);
@@ -83,12 +91,18 @@ namespace axsynth
             g.setColour (juce::Colours::black.withAlpha (0.30f)); // 70 % brightness
             g.fillRect (area);
 
+            if (! rectVisible)
+                return;
+
             // Outside the rectangle: darker still.
             juce::RectangleList<float> outside (area);
             outside.subtract (r);
             g.setColour (juce::Colours::black.withAlpha (0.40f));
             g.fillRectList (outside);
         }
+
+        if (! rectVisible)
+            return;
 
         // Scanlines.
         for (int i = 0; i < numFrames; ++i)

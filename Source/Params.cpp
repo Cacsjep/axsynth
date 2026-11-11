@@ -82,6 +82,9 @@ namespace axsynth::params
                             });
 
         layout.add (std::make_unique<P> (juce::ParameterID { attack, 1 }, "Attack", logRange (0.001f, 5.0f), 0.010f, timeAttrs));
+        layout.add (std::make_unique<P> (juce::ParameterID { decay, 1 }, "Decay", logRange (0.005f, 10.0f), 0.300f, timeAttrs));
+        layout.add (std::make_unique<P> (juce::ParameterID { sustain, 1 }, "Sustain",
+            juce::NormalisableRange<float> (0.0f, 1.0f), 1.0f, pct));
         layout.add (std::make_unique<P> (juce::ParameterID { release, 1 }, "Release", logRange (0.005f, 10.0f), 0.300f, timeAttrs));
 
         // dB range, skewed so 0 dB sits at a useful knob angle; minimum = -inf.

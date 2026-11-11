@@ -157,6 +157,7 @@ namespace axsynth
                 editor->setSize (1000, 620);
                 editor->refresh();
                 expect (editor->isSetupPanelVisible(), "setup panel should be open without credentials");
+                expect (! editor->isCameraRectVisible(), "rectangle must be hidden behind the setup panel");
 
                 auto snap = editor->createComponentSnapshot (editor->getLocalBounds());
                 expectEquals (snap.getWidth(), 1000);
@@ -183,6 +184,7 @@ namespace axsynth
                 expect (editor->isSetupPanelVisible(), "an injected image is not a camera connection");
                 editor->setSetupPanelVisible (false);
                 expect (! editor->isSetupPanelVisible());
+                expect (editor->isCameraRectVisible(), "rectangle back when the setup panel closes");
 
                 snap = editor->createComponentSnapshot (editor->getLocalBounds());
                 expect (hasVariedPixels (snap));
