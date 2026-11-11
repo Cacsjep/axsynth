@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  AxSynth installer (WiX Toolset v4).
+  Build: scripts/build-msi.ps1 -Version x.y.z -Bundle <path to AxSynth.vst3 bundle folder>
+  Variables:
+    ProductVersion  (-d ProductVersion=x.y.z)   version from the git tag
+    BundleDir       (-d BundleDir=...)          the AxSynth.vst3 bundle folder
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
+     xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui">
+
+  <!-- UpgradeCode must never change: it ties all AxSynth versions together for MajorUpgrade. -->
+  <Package Name="AxSynth"
+           Manufacturer="AxSynth"
+           Version="$(var.ProductVersion)"
+           UpgradeCode="89852B91-1B03-477C-ACF2-4A097E5FE20A"
+           Scope="perMachine"
+           Language="1033"
+           Compressed="yes">
+
+    <SummaryInformation Description="AxSynth VST3 instrument" />
+
+    <MajorUpgrade AllowSameVersionUpgrades="yes"
+                  DowngradeErrorMessage="A newer version of AxSynth is already installed." />
+    <MediaTemplate EmbedCab="yes" />
+
+    <Property Id="ARPNOREPAIR" Value="1" />
+
+    <!-- License, install, finish. No options. -->
+    <ui:WixUI Id="WixUI_Minimal" />
+    <WixVariable Id="WixUILicenseRtf" Value="License.rtf" />
+
+    <!-- C:\Program Files\Common Files\VST3\AxSynth.vst3\... -->
+    <StandardDirectory Id="CommonFiles64Folder">
+      <Directory Id="VST3Folder" Name="VST3">
+        <Directory Id="BundleFolder" Name="AxSynth.vst3">
+          <Directory Id="ContentsFolder" Name="Contents">
+            <Directory Id="BinaryFolder" Name="x86_64-win" />
+            <Directory Id="ResourcesFolder" Name="Resources" />
+          </Directory>
+        </Directory>
+      </Directory>
+    </StandardDirectory>
+
+    <Feature Id="Main" Title="AxSynth VST3" Level="1">
+      <Component Directory="BinaryFolder">
+        <File Id="PluginBinary" Source="$(var.BundleDir)\Contents\x86_64-win\AxSynth.vst3" KeyPath="yes" />
+      </Component>
+      <Component Directory="ResourcesFolder">
+        <File Id="ModuleInfo" Source="$(var.BundleDir)\Contents\Resources\moduleinfo.json" KeyPath="yes" />
+      </Component>
+    </Feature>
+  </Package>
+</Wix>

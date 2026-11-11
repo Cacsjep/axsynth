@@ -1,0 +1,156 @@
+# Release: on a tag vX.Y.Z run the same build + gates as CI, then build the MSI,
+# sign (only if a certificate secret exists), compute SHA-256 sums and publish a
+# GitHub Release. Any failed gate stops the run before anything is published.
+#
+# Manual dry run (no tag, nothing published, outputs uploaded as an artifact):
+#   gh workflow run release.yml --ref <branch> -f version=1.0.0 -f dry_run=true
+name: Release
+
+on:
+  push:
+    tags: ['v*.*.*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version x.y.z (must have a CHANGELOG section)
+        required: true
+      dry_run:
+        description: Build everything but do not publish
+        type: boolean
+        default: true
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  WIX_VERSION: 4.0.6
+
+jobs:
+  prepare:
+    name: Version and release notes
+    runs-on: windows-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Determine version
+        id: version
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          $v = if ($env:GITHUB_EVENT_NAME -eq 'workflow_dispatch') { $env:INPUT_VERSION } else { $env:GITHUB_REF_NAME -replace '^v', '' }
+          if ($v -notmatch '^\d+\.\d+\.\d+$') { Write-Host "::error::Version '$v' is not x.y.z"; exit 1 }
+          echo "version=$v" >> $env:GITHUB_OUTPUT
+          Write-Host "Version: $v"
+
+      - name: Extract CHANGELOG section
+        run: ./scripts/changelog-notes.ps1 -Version ${{ steps.version.outputs.version }} -OutFile notes.md
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: release-notes
+          path: notes.md
+
+  build:
+    needs: prepare
+    uses: ./.github/workflows/build.yml
+    with:
+      version: ${{ needs.prepare.outputs.version }}
+
+  package:
+    name: Package and publish
+    needs: [prepare, build]
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      VERSION: ${{ needs.prepare.outputs.version }}
+      HAS_CERT: ${{ secrets.WINDOWS_CERT_PFX_BASE64 != '' }}
+      PUBLISH: ${{ github.event_name == 'push' || !inputs.dry_run }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: ${{ needs.build.outputs.artifact }}
+          path: stage
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: release-notes
+          path: notes
+
+      - name: Sign VST3 binary
+        if: env.HAS_CERT == 'true'
+        env:
+          WINDOWS_CERT_PFX_BASE64: ${{ secrets.WINDOWS_CERT_PFX_BASE64 }}
+          WINDOWS_CERT_PASSWORD: ${{ secrets.WINDOWS_CERT_PASSWORD }}
+        run: ./scripts/sign.ps1 stage/AxSynth.vst3/Contents/x86_64-win/AxSynth.vst3
+
+      - name: Install WiX ${{ env.WIX_VERSION }}
+        run: |
+          dotnet tool install --global wix --version $env:WIX_VERSION
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          wix extension add -g "WixToolset.UI.wixext/$env:WIX_VERSION"
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          wix --version
+
+      - name: Build MSI
+        run: ./scripts/build-msi.ps1 -Version $env:VERSION -Bundle stage/AxSynth.vst3 -OutDir dist -WixVersion $env:WIX_VERSION
+
+      - name: Sign MSI
+        if: env.HAS_CERT == 'true'
+        env:
+          WINDOWS_CERT_PFX_BASE64: ${{ secrets.WINDOWS_CERT_PFX_BASE64 }}
+          WINDOWS_CERT_PASSWORD: ${{ secrets.WINDOWS_CERT_PASSWORD }}
+        run: ./scripts/sign.ps1 "dist/AxSynth-$env:VERSION-win64.msi"
+
+      - name: Zip VST3 bundle and compute checksums
+        run: |
+          Compress-Archive -Path stage/AxSynth.vst3 -DestinationPath "dist/AxSynth-$env:VERSION-win64-vst3.zip"
+          Push-Location dist
+          Get-ChildItem -File -Exclude SHA256SUMS.txt | Sort-Object Name | ForEach-Object {
+            "{0}  {1}" -f (Get-FileHash -Algorithm SHA256 $_.Name).Hash.ToLower(), $_.Name
+          } | Set-Content -Encoding ascii SHA256SUMS.txt
+          Get-Content SHA256SUMS.txt
+          Pop-Location
+
+      - name: Compose release notes
+        run: |
+          $notes = Get-Content -Raw notes/notes.md
+          if ($env:HAS_CERT -eq 'true') {
+            $notes += "`n### Downloads`n`nThe installer and the plugin binary are code signed.`n"
+          } else {
+            $notes += "`n### Downloads`n`nThis build is not code signed. Windows SmartScreen may warn when you run the installer; choose 'More info', then 'Run anyway'.`n"
+          }
+          $notes += "`nVerify downloads with SHA256SUMS.txt (``Get-FileHash -Algorithm SHA256 <file>``).`n"
+          Set-Content -Encoding utf8NoBOM dist-notes.md $notes
+          Get-Content dist-notes.md
+
+      - name: Upload release files (workflow artifact)
+        uses: actions/upload-artifact@v7
+        with:
+          name: AxSynth-release-${{ env.VERSION }}
+          path: |
+            dist/
+            dist-notes.md
+
+      - name: Publish GitHub Release
+        if: env.PUBLISH == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "v$env:VERSION" --title "AxSynth $env:VERSION" --notes-file dist-notes.md --verify-tag `
+            "dist/AxSynth-$env:VERSION-win64.msi" "dist/AxSynth-$env:VERSION-win64-vst3.zip" dist/SHA256SUMS.txt
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }

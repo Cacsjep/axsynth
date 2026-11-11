@@ -4,3 +4,5 @@ out/
 *.user
 /tools/
 .claude/
+gate-logs/
+dist/

@@ -1,0 +1,127 @@
+# Reusable workflow: Release build + all gates. Shared by ci.yml and release.yml.
+# Any failing gate fails this workflow, so callers that depend on it never publish.
+name: Build and gates
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        description: Version injected into CMake (x.y.z)
+        type: string
+        default: 0.0.0
+    outputs:
+      artifact:
+        description: Name of the uploaded VST3 bundle artifact
+        value: ${{ jobs.build.outputs.artifact }}
+
+env:
+  PLUGINVAL_VERSION: v1.0.4
+  VST3SDK_TAG: v3.8.1_build_84
+
+jobs:
+  build:
+    name: Build and gates (Windows x64)
+    runs-on: windows-latest
+    timeout-minutes: 90
+    outputs:
+      artifact: ${{ steps.names.outputs.artifact }}
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+
+      - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Artifact name
+        id: names
+        run: echo "artifact=AxSynth-vst3-${{ inputs.version }}" >> $env:GITHUB_OUTPUT
+
+      - name: Configure
+        run: |
+          cmake --version
+          ninja --version
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release "-DAXSYNTH_VERSION=${{ inputs.version }}"
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+
+      - name: Build
+        run: |
+          cmake --build build --parallel
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+
+      - name: Check bundle layout
+        run: |
+          $bundle = 'build/AxSynth_artefacts/Release/VST3/AxSynth.vst3'
+          Get-ChildItem -Recurse -File $bundle | ForEach-Object { $_.FullName }
+          foreach ($f in 'Contents/x86_64-win/AxSynth.vst3', 'Contents/Resources/moduleinfo.json') {
+            if (-not (Test-Path (Join-Path $bundle $f))) { Write-Host "::error::Missing $f in bundle"; exit 1 }
+          }
+
+      # ---------------------------------------------------------------- gate tools
+      - name: Download pluginval ${{ env.PLUGINVAL_VERSION }}
+        run: |
+          New-Item -ItemType Directory -Force tools/pluginval | Out-Null
+          Invoke-WebRequest "https://github.com/Tracktion/pluginval/releases/download/$env:PLUGINVAL_VERSION/pluginval_Windows.zip" -OutFile tools/pluginval.zip
+          Expand-Archive tools/pluginval.zip -DestinationPath tools/pluginval -Force
+          tools/pluginval/pluginval.exe --version
+
+      - name: Cache VST3 validator
+        id: validator-cache
+        uses: actions/cache@v6
+        with:
+          path: tools/vst3-validator
+          key: vst3-validator-${{ env.VST3SDK_TAG }}-${{ runner.os }}-v1
+
+      - name: Build VST3 validator (${{ env.VST3SDK_TAG }})
+        if: steps.validator-cache.outputs.cache-hit != 'true'
+        run: |
+          git clone --depth 1 --branch $env:VST3SDK_TAG --recurse-submodules --shallow-submodules https://github.com/steinbergmedia/vst3sdk.git "$env:RUNNER_TEMP/vst3sdk"
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          cmake -S "$env:RUNNER_TEMP/vst3sdk" -B "$env:RUNNER_TEMP/vst3sdk-build" -G Ninja -DCMAKE_BUILD_TYPE=Release `
+            -DSMTG_ENABLE_VST3_PLUGIN_EXAMPLES=OFF -DSMTG_ENABLE_VST3_HOSTING_EXAMPLES=OFF -DSMTG_ENABLE_VSTGUI_SUPPORT=OFF
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          cmake --build "$env:RUNNER_TEMP/vst3sdk-build" --target validator
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          New-Item -ItemType Directory -Force tools/vst3-validator | Out-Null
+          Copy-Item "$env:RUNNER_TEMP/vst3sdk-build/bin/validator.exe" tools/vst3-validator/
+
+      # ---------------------------------------------------------------- gates
+      - name: "Gate 1+5: unit and smoke tests"
+        run: ./scripts/gates.ps1 -Gate unit
+
+      - name: "Gate 4: realtime safety"
+        if: ${{ !cancelled() }}
+        run: ./scripts/gates.ps1 -Gate realtime
+
+      - name: "Gate 2: pluginval strictness 10"
+        if: ${{ !cancelled() }}
+        run: ./scripts/gates.ps1 -Gate pluginval
+
+      - name: "Gate 3: Steinberg VST3 validator"
+        if: ${{ !cancelled() }}
+        run: ./scripts/gates.ps1 -Gate validator
+
+      - name: Upload gate logs
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: gate-logs-${{ inputs.version }}
+          path: gate-logs/
+          if-no-files-found: ignore
+
+      # Only reached when every gate passed. Staged so the zip keeps the AxSynth.vst3 folder.
+      - name: Stage VST3 bundle
+        run: |
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Copy-Item -Recurse build/AxSynth_artefacts/Release/VST3/AxSynth.vst3 dist/
+
+      - name: Upload VST3 bundle
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ steps.names.outputs.artifact }}
+          path: dist/
+          if-no-files-found: error
