@@ -105,6 +105,48 @@ namespace axsynth::params
         layout.add (std::make_unique<P> (juce::ParameterID { filterEnv, 1 }, "Filter Env",
             juce::NormalisableRange<float> (0.0f, 1.0f), 0.0f, pct));
 
+        layout.add (std::make_unique<juce::AudioParameterChoice> (juce::ParameterID { filterType, 1 }, "Filter Type",
+            filterTypeNames, 0));
+
+        layout.add (std::make_unique<juce::AudioParameterChoice> (juce::ParameterID { filterSlope, 1 }, "Filter Slope",
+            juce::StringArray { "12 dB", "24 dB" }, 0));
+
+        layout.add (std::make_unique<P> (juce::ParameterID { drive, 1 }, "Drive",
+            juce::NormalisableRange<float> (0.0f, 1.0f), 0.0f, pct));
+        layout.add (std::make_unique<P> (juce::ParameterID { velFilter, 1 }, "Velocity to Filter",
+            juce::NormalisableRange<float> (0.0f, 1.0f), 0.0f, pct));
+
+        layout.add (std::make_unique<P> (juce::ParameterID { motion, 1 }, "Motion",
+            juce::NormalisableRange<float> (0.0f, 1.0f), 0.0f, pct));
+        layout.add (std::make_unique<juce::AudioParameterBool> (juce::ParameterID { freeze, 1 }, "Freeze", false));
+        layout.add (std::make_unique<juce::AudioParameterChoice> (juce::ParameterID { scanMode, 1 }, "Scan", scanModeNames, 0));
+
+        layout.add (std::make_unique<juce::AudioParameterBool> (juce::ParameterID { mono, 1 }, "Mono", false));
+        {
+            juce::NormalisableRange<float> glideRange (0.0f, 2.0f);
+            glideRange.setSkewForCentre (0.25f);
+            layout.add (std::make_unique<P> (juce::ParameterID { glide, 1 }, "Glide", glideRange, 0.0f,
+                A().withStringFromValueFunction ([] (float v, int) { return v < 0.0005f ? juce::String ("Off") : formatTime (v); })
+                   .withValueFromStringFunction ([] (const juce::String& s)
+                   {
+                       const auto v = s.getFloatValue();
+                       return s.containsIgnoreCase ("ms") ? v / 1000.0f : v;
+                   })));
+        }
+
+        layout.add (std::make_unique<P> (juce::ParameterID { chorusMix, 1 }, "Chorus",
+            juce::NormalisableRange<float> (0.0f, 1.0f), 0.0f, pct));
+        layout.add (std::make_unique<P> (juce::ParameterID { delayMix, 1 }, "Delay",
+            juce::NormalisableRange<float> (0.0f, 1.0f), 0.0f, pct));
+        layout.add (std::make_unique<juce::AudioParameterChoice> (juce::ParameterID { delayTime, 1 }, "Delay Time",
+            delayTimeNames, 1));
+        layout.add (std::make_unique<P> (juce::ParameterID { delayFeedback, 1 }, "Delay Feedback",
+            juce::NormalisableRange<float> (0.0f, 0.9f), 0.35f, pct));
+        layout.add (std::make_unique<P> (juce::ParameterID { reverbMix, 1 }, "Reverb",
+            juce::NormalisableRange<float> (0.0f, 1.0f), 0.0f, pct));
+        layout.add (std::make_unique<P> (juce::ParameterID { reverbSize, 1 }, "Reverb Size",
+            juce::NormalisableRange<float> (0.0f, 1.0f), 0.6f, pct));
+
         auto timeAttrs = A().withStringFromValueFunction ([] (float v, int) { return formatTime (v); })
                             .withValueFromStringFunction ([] (const juce::String& s)
                             {

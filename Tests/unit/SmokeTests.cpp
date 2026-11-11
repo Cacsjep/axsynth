@@ -154,13 +154,13 @@ namespace axsynth
                 if (editor == nullptr)
                     return;
 
-                editor->setSize (1000, 620);
+                editor->setSize (1280, 720);
                 editor->refresh();
                 expect (editor->isSetupPanelVisible(), "setup panel should be open without credentials");
                 expect (! editor->isCameraRectVisible(), "rectangle must be hidden behind the setup panel");
 
                 auto snap = editor->createComponentSnapshot (editor->getLocalBounds());
-                expectEquals (snap.getWidth(), 1000);
+                expectEquals (snap.getWidth(), 1280);
                 expect (hasVariedPixels (snap), "snapshot is a single colour");
                 writeSnapshot (snap, "editor_setup.png");
 
@@ -190,13 +190,34 @@ namespace axsynth
                 expect (hasVariedPixels (snap));
                 writeSnapshot (snap, "editor_image.png");
 
-                editor->setSize (1500, 930);
+                // Live displays: Synth preset, LFO on, a held note (envelope dot, filter env curve).
+                {
+                    const int synthPreset = [&] { for (int i = 0; i < proc.getNumPrograms(); ++i) if (proc.getProgramName (i) == "Synth") return i; return 0; }();
+                    proc.setCurrentProgram (synthPreset);
+                    setParam (proc, params::lfoAmount, 0.35f);
+                    setParam (proc, params::lfoRate, 0.7f);
+                    juce::MidiBuffer held;
+                    held.addEvent (juce::MidiMessage::noteOn (1, 60, (juce::uint8) 110), 0);
+                    for (int i = 0; i < 12; ++i)
+                    {
+                        buffer.clear();
+                        proc.processBlock (buffer, held);
+                        held.clear();
+                    }
+                    juce::Thread::sleep (400);
+                    editor->refresh();
+                    snap = editor->createComponentSnapshot (editor->getLocalBounds());
+                    expect (hasVariedPixels (snap));
+                    writeSnapshot (snap, "editor_live.png");
+                }
+
+                editor->setSize (1920, 1080);
                 editor->refresh();
                 snap = editor->createComponentSnapshot (editor->getLocalBounds());
-                expectEquals (snap.getWidth(), 1500);
+                expectEquals (snap.getWidth(), 1920);
                 writeSnapshot (snap, "editor_image_1500.png");
 
-                editor->setSize (1000, 620);
+                editor->setSize (1280, 720);
                 editor->setSetupPanelVisible (true);
                 snap = editor->createComponentSnapshot (editor->getLocalBounds());
                 writeSnapshot (snap, "editor_image_setup.png");
@@ -327,6 +348,82 @@ namespace axsynth
                 expectWithinAbsoluteError (p->getValue(), 0.0f, 1.0e-6f);
             }
 
+            beginTest ("Effects: delay echoes at the synced time, reverb adds a tail; motion gate silences a still scene");
+            {
+                constexpr double sr = 48000.0;
+                // Short note, then measure where the energy is. 120 BPM (no play head): 1/4 = 0.5 s.
+                auto render = [&] (std::function<void (AxSynthProcessor&)> setup)
+                {
+                    AxSynthProcessor p;
+                    setup (p);
+                    p.prepareToPlay (sr, 512);
+                    juce::AudioBuffer<float> buf (2, 512);
+                    std::vector<float> out;
+                    for (int b = 0; b < 120; ++b)        // 1.28 s
+                    {
+                        juce::MidiBuffer m;
+                        if (b == 0) m.addEvent (juce::MidiMessage::noteOn (1, 69, (juce::uint8) 120), 0);
+                        if (b == 4) m.addEvent (juce::MidiMessage::noteOff (1, 69), 0);
+                        buf.clear();
+                        p.processBlock (buf, m);
+                        for (int i = 0; i < 512; ++i) out.push_back (buf.getSample (0, i));
+                    }
+                    p.releaseResources();
+                    return out;
+                };
+                auto rms = [] (const std::vector<float>& x, double t0, double t1)
+                {
+                    double acc = 0.0; int n = 0;
+                    for (int i = (int) (t0 * sr); i < (int) (t1 * sr) && i < (int) x.size(); ++i, ++n) acc += x[(size_t) i] * x[(size_t) i];
+                    return n > 0 ? std::sqrt (acc / n) : 0.0;
+                };
+                auto base = [&] (AxSynthProcessor& p)
+                {
+                    setParam (p, params::unison, 1.0f);
+                    setParam (p, params::attack, 0.001f);
+                    setParam (p, params::release, 0.01f);
+                };
+
+                const auto dry = render (base);
+                expectLessThan (rms (dry, 0.3, 0.45), 1.0e-4);
+
+                const auto delayed = render ([&] (AxSynthProcessor& p)
+                {
+                    base (p);
+                    setParam (p, params::delayMix, 1.0f);
+                    setParam (p, params::delayFeedback, 0.0f);
+                    setParam (p, params::delayTime, 3.0f);   // 1/4
+                });
+                expectLessThan (rms (delayed, 0.3, 0.45), 1.0e-3);   // nothing before the echo
+                expectGreaterThan (rms (delayed, 0.5, 0.55), 0.02);  // echo at 0.5 s
+
+                const auto reverbed = render ([&] (AxSynthProcessor& p)
+                {
+                    base (p);
+                    setParam (p, params::reverbMix, 1.0f);
+                    setParam (p, params::reverbSize, 0.9f);
+                });
+                expectGreaterThan (rms (reverbed, 0.3, 0.45), 1.0e-3); // tail after the note
+
+                const auto chorused = render ([&] (AxSynthProcessor& p)
+                {
+                    base (p);
+                    setParam (p, params::chorusMix, 1.0f);
+                });
+                double diff = 0.0;
+                for (size_t i = 0; i < 4000; ++i) diff += std::abs (chorused[i + 2000] - dry[i + 2000]);
+                expectGreaterThan (diff, 1.0, "chorus changes the signal");
+
+                // Motion 100 % and no camera: nothing moves, so it is quiet.
+                const auto gated = render ([&] (AxSynthProcessor& p)
+                {
+                    base (p);
+                    setParam (p, params::motion, 1.0f);
+                    setParam (p, params::release, 1.0f);
+                });
+                expectLessThan (rms (gated, 0.05, 0.08), rms (dry, 0.02, 0.04) * 0.1);
+            }
+
             beginTest ("Presets: names, apply sets listed values and resets the rest");
             {
                 AxSynthProcessor proc;
@@ -427,7 +524,7 @@ namespace axsynth
             proc.prepareToPlay (48000.0, 512);
             std::unique_ptr<juce::AudioProcessorEditor> base (proc.createEditor());
             auto* editor = dynamic_cast<AxSynthEditor*> (base.get());
-            editor->setSize (1000, 620);
+            editor->setSize (1280, 720);
             expect (editor->isSetupPanelVisible());
 
             CameraSettings s;
@@ -452,6 +549,30 @@ namespace axsynth
             for (size_t k = 1; k < a.size(); ++k) strongest = juce::jmax (strongest, a[k]);
             logMessage ("  live: strongest upper harmonic " + juce::String (strongest, 1) + " dB");
             expect (strongest > -40.0, "image did not add harmonics");
+
+            // Flutter: how much the harmonics move over 2 s of an (assumed) still scene.
+            // Camera noise shows up here; lower is cleaner.
+            {
+                const auto framesBefore = proc.getEngine().getFramesRendered();
+                const auto timeBefore = juce::Time::getMillisecondCounterHiRes();
+                std::vector<HarmonicMatrix> snaps (40);
+                for (auto& m : snaps) { proc.getEngine().getDisplayHarmonics (m); juce::Thread::sleep (50); }
+                double cvSum = 0.0; int cvCount = 0;
+                for (size_t k = 0; k < (size_t) numHarmonics; ++k)
+                {
+                    double mean = 0.0, sq = 0.0;
+                    for (auto& m : snaps) { mean += m[15][k]; sq += (double) m[15][k] * m[15][k]; }
+                    mean /= (double) snaps.size();
+                    const double var = juce::jmax (0.0, sq / (double) snaps.size() - mean * mean);
+                    if (mean > 1.0e-3) { cvSum += std::sqrt (var) / mean; ++cvCount; }
+                }
+                const double flutter = cvCount > 0 ? 100.0 * cvSum / cvCount : 0.0;
+                const double secs = (juce::Time::getMillisecondCounterHiRes() - timeBefore) / 1000.0;
+                const double perSec = (double) (proc.getEngine().getFramesRendered() - framesBefore) / secs;
+                std::printf ("  live: worker renders %.0f frames/s (all 32 frames at 25 updates/s would be 800)\n", perSec);
+                std::printf ("  live: harmonic flutter %.2f %% (mean deviation of the audible harmonics)\n", flutter);
+                expectLessThan (flutter, 10.0, "harmonics flutter strongly on a still scene");
+            }
 
             // A different region of the image gives a different timbre.
             proc.getEngine().setRect ({ 0.02f, 0.02f, 0.2f, 0.3f });

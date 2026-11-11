@@ -8,22 +8,43 @@
 namespace axsynth
 {
     inline constexpr int numFrames    = 32;   // scanlines (N)
-    inline constexpr int numHarmonics = 64;   // sections per scanline (H)
-    inline constexpr int tableSize    = 2048; // samples per frame
-    inline constexpr int numMips      = 7;    // 64, 32, 16, 8, 4, 2, 1 harmonics
-    inline constexpr int tableStride  = tableSize + 1; // +1 guard sample for interpolation
+    inline constexpr int numHarmonics = 256;  // bands per scanline: harmonics 1..256 (A1 reaches 14 kHz)
+    inline constexpr int tableSize    = 4096; // samples per frame of mip 0: 16 per period of the top harmonic
+    inline constexpr int numMips      = 16;   // half-octave steps, see harmonicsInMip
 
     using HarmonicMatrix = std::array<std::array<float, numHarmonics>, numFrames>;
 
-    inline constexpr int harmonicsInMip (int mip) noexcept { return numHarmonics >> mip; }
+    // Band-limited versions in half-octave steps: the brightness drop when a note crosses
+    // a step is half as large as with octave steps.
+    inline constexpr int mipHarmonics[numMips] { 256, 181, 128, 90, 64, 45, 32, 22, 16, 11, 8, 6, 4, 3, 2, 1 };
+    inline constexpr int harmonicsInMip (int mip) noexcept { return mipHarmonics[mip]; }
 
-    // 32 frames x 7 band-limited mip levels x 2048 samples. Allocated once.
+    // Each mip is only as long as it needs: at least 16 samples per period of its highest
+    // harmonic (clean linear interpolation), at least 64. Power of two (inverse FFT size).
+    constexpr int mipSizeFor (int harmonics) noexcept
+    {
+        int n = 64;
+        while (n < 16 * harmonics) n *= 2;
+        return n;
+    }
+    inline constexpr int mipSize (int mip) noexcept { return mipSizeFor (harmonicsInMip (mip)); }
+    static_assert (mipSizeFor (numHarmonics) == tableSize);
+
+    // Start of mip m in the flat buffer; each frame has one guard sample for interpolation.
+    constexpr size_t mipOffset (int mip) noexcept
+    {
+        size_t o = 0;
+        for (int m = 0; m < mip; ++m) o += (size_t) numFrames * (size_t) (mipSize (m) + 1);
+        return o;
+    }
+
+    // 32 frames x 16 band-limited mips of varying length (~2.2 MB). Allocated once.
     struct Wavetable
     {
-        Wavetable() : data ((size_t) numMips * numFrames * tableStride, 0.0f) {}
+        Wavetable() : data (mipOffset (numMips), 0.0f) {}
 
-        float* frame (int mip, int f) noexcept { return data.data() + ((size_t) mip * numFrames + (size_t) f) * tableStride; }
-        const float* frame (int mip, int f) const noexcept { return data.data() + ((size_t) mip * numFrames + (size_t) f) * tableStride; }
+        float* frame (int mip, int f) noexcept { return data.data() + mipOffset (mip) + (size_t) f * (size_t) (mipSize (mip) + 1); }
+        const float* frame (int mip, int f) const noexcept { return data.data() + mipOffset (mip) + (size_t) f * (size_t) (mipSize (mip) + 1); }
 
         std::vector<float> data;
     };

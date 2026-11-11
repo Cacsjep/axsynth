@@ -21,6 +21,9 @@ namespace axsynth::http
         bool add (void* handle);
         // Closes a handle owned by the network thread unless cancel() already did.
         void release (void*& handle);
+        // Closes one registered handle from any thread (e.g. a watchdog) without
+        // cancelling everything. The owner's later release() then finds it gone.
+        void closeIfRegistered (void* handle);
 
         void cancel();
         void reset();
@@ -85,6 +88,13 @@ namespace axsynth::http
         // Body of the last response. >0 bytes read, 0 end of body, -1 error / cancelled.
         int read (void* dest, int maxBytes);
         juce::String readAll (int maxBytes = 1 << 20);
+
+        // Handle of the current request, for Canceller::closeIfRegistered from another thread.
+        void* requestHandle() const noexcept { return request; }
+
+        // Overrides the receive timeout of the current request (e.g. for a long-running stream
+        // whose deadlines are enforced by the caller).
+        void setReceiveTimeout (int ms);
 
     private:
         bool open();

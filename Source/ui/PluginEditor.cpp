@@ -4,14 +4,36 @@ namespace axsynth
 {
     namespace layout
     {
-        // All in base coordinates (theme::baseWidth x theme::baseHeight).
-        const juce::Rectangle<int> camera { 16, 16, 568, 588 };
-        const juce::Rectangle<int> stack  { 608, 46, 376, 178 };
-        const juce::Rectangle<int> gear   { 962, 14, 20, 20 };
-        const juce::Rectangle<int> preset { 820, 12, 130, 24 };
-        constexpr int columns[] { 646, 721, 796, 871, 946 };
-        constexpr int rows[]    { 280, 374, 468, 562 };
-        constexpr int meterW = 6, meterH = 58;
+        // All in base coordinates (theme::baseWidth x theme::baseHeight = 1280 x 720).
+        const juce::Rectangle<int> camera { 16, 16, 560, 688 };
+        const juce::Rectangle<int> gear   { 1242, 14, 20, 20 };
+        const juce::Rectangle<int> preset { 1080, 12, 150, 24 };
+        const juce::Rectangle<int> stack  { 592, 44, 552, 150 };
+        const juce::Rectangle<int> output { 1156, 44, 108, 150 };
+
+        // Sections: two columns of 330 px, three rows.
+        const juce::Rectangle<int> wavetable { 592, 206, 330, 158 };
+        const juce::Rectangle<int> voice     { 934, 206, 330, 158 };
+        const juce::Rectangle<int> filter    { 592, 376, 330, 158 };
+        const juce::Rectangle<int> lfo       { 934, 376, 330, 158 };
+        const juce::Rectangle<int> envelope  { 592, 546, 330, 158 };
+        const juce::Rectangle<int> fx        { 934, 546, 330, 158 };
+
+        constexpr int titleH = 24, displayH = 46, knobBottom = 132; // knob circles end here (section y)
+
+        juce::Rectangle<int> displayIn (juce::Rectangle<int> sec) { return { sec.getX() + 10, sec.getY() + titleH, sec.getWidth() - 20, displayH }; }
+
+        // Buttons in the title row, right aligned; 'right' = distance of their right edge.
+        juce::Rectangle<int> headerButtons (juce::Rectangle<int> sec, int width, int right = 10)
+        {
+            return { sec.getRight() - right - width, sec.getY() + 4, width, 17 };
+        }
+
+        // Bottom-aligned so all labels in a section share one line.
+        void place (Knob& k, juce::Rectangle<int> sec, int dx)
+        {
+            k.placeAt (sec.getX() + dx, sec.getY() + knobBottom - k.getDiameter() / 2);
+        }
     }
 
     void GearButton::paintButton (juce::Graphics& g, bool highlighted, bool down)
@@ -54,24 +76,40 @@ namespace axsynth
           cameraView (p.getEngine()),
           setupPanel (p),
           stack (p.getEngine()),
-          position  (p.getState(), params::position,  "Position"),
-          lines     (p.getState(), params::lines,     "Lines"),
-          spread    (p.getState(), params::spread,    "Spread"),
-          tone      (p.getState(), params::tone,      "Tone"),
-          contrast  (p.getState(), params::contrast,  "Contrast"),
+          position  (p.getState(), params::position,  "Position", Knob::Size::big),
+          lines     (p.getState(), params::lines,     "Lines",    Knob::Size::small),
+          spread    (p.getState(), params::spread,    "Spread",   Knob::Size::small),
+          tone      (p.getState(), params::tone,      "Tone",     Knob::Size::small),
+          contrast  (p.getState(), params::contrast,  "Contrast", Knob::Size::small),
+          motion    (p.getState(), params::motion,    "Motion",   Knob::Size::small),
           unison    (p.getState(), params::unison,    "Unison"),
           detune    (p.getState(), params::detune,    "Detune"),
           sub       (p.getState(), params::sub,       "Sub"),
-          lfoRate   (p.getState(), params::lfoRate,   "LFO Rate"),
-          lfoAmount (p.getState(), params::lfoAmount, "LFO Amount"),
-          cutoff    (p.getState(), params::cutoff,    "Cutoff"),
+          glide     (p.getState(), params::glide,     "Glide"),
+          cutoff    (p.getState(), params::cutoff,    "Cutoff",   Knob::Size::big),
           resonance (p.getState(), params::resonance, "Resonance"),
-          filterEnv (p.getState(), params::filterEnv, "Flt Env"),
-          output    (p.getState(), params::output,    "Output"),
+          filterEnv (p.getState(), params::filterEnv, "Env Amt"),
+          drive     (p.getState(), params::drive,     "Drive"),
+          velFilter (p.getState(), params::velFilter, "Vel",      Knob::Size::small),
+          lfoRate   (p.getState(), params::lfoRate,   "Rate"),
+          lfoAmount (p.getState(), params::lfoAmount, "Amount"),
           attack    (p.getState(), params::attack,    "Attack"),
           decay     (p.getState(), params::decay,     "Decay"),
           sustain   (p.getState(), params::sustain,   "Sustain"),
-          release   (p.getState(), params::release,   "Release")
+          release   (p.getState(), params::release,   "Release"),
+          chorus    (p.getState(), params::chorusMix, "Chorus"),
+          delay     (p.getState(), params::delayMix,  "Delay"),
+          delayTime (p.getState(), params::delayTime, "Time"),
+          delayFeedback (p.getState(), params::delayFeedback, "Fdbk"),
+          reverb    (p.getState(), params::reverbMix, "Reverb"),
+          reverbSize (p.getState(), params::reverbSize, "Size"),
+          output    (p.getState(), params::output,    "Level"),
+          filterType (*p.getState().getParameter (params::filterType), params::filterTypeNames),
+          filterSlope (*p.getState().getParameter (params::filterSlope), params::filterSlopeNames),
+          scanMode   (*p.getState().getParameter (params::scanMode), { "VERT", "HORZ" }),
+          freeze     (*p.getState().getParameter (params::freeze), { "FREEZE" }),
+          mono       (*p.getState().getParameter (params::mono), { "MONO" }),
+          lfoSync    (*p.getState().getParameter (params::lfoSync), { "SYNC" })
     {
         setLookAndFeel (&lookAndFeel);
         setOpaque (true);
@@ -80,10 +118,20 @@ namespace axsynth
         content.addAndMakeVisible (cameraView);
         content.addChildComponent (setupPanel);
         content.addAndMakeVisible (stack);
+        for (auto* sec : { &secWavetable, &secVoice, &secFilter, &secLfo, &secEnvelope, &secFx, &secOutput })
+            content.addAndMakeVisible (sec);
+        for (juce::Component* d : { (juce::Component*) &harmonicsView, (juce::Component*) &unisonView,
+                                    (juce::Component*) &filterView, (juce::Component*) &lfoView,
+                                    (juce::Component*) &envelopeView, (juce::Component*) &fxView,
+                                    (juce::Component*) &filterType, (juce::Component*) &filterSlope, (juce::Component*) &scanMode,
+                                    (juce::Component*) &freeze, (juce::Component*) &mono, (juce::Component*) &lfoSync })
+            content.addAndMakeVisible (d);
         content.addAndMakeVisible (gear);
         content.addAndMakeVisible (meter);
-        for (auto* k : { &position, &lines, &spread, &tone, &contrast, &unison, &detune, &sub, &lfoRate, &lfoAmount,
-                         &cutoff, &resonance, &filterEnv, &output, &attack, &decay, &sustain, &release })
+        for (auto* k : { &position, &lines, &spread, &tone, &contrast, &motion, &unison, &detune, &sub, &glide,
+                         &cutoff, &resonance, &filterEnv, &drive, &velFilter, &lfoRate, &lfoAmount,
+                         &attack, &decay, &sustain, &release,
+                         &chorus, &delay, &delayTime, &delayFeedback, &reverb, &reverbSize, &output })
             content.addAndMakeVisible (k);
 
         lfoRate.getSlider().onRightClick = [this] { toggleLfoSync(); };
@@ -135,28 +183,74 @@ namespace axsynth
 
     void AxSynthEditor::layoutContent()
     {
+        using namespace layout;
         content.setBounds (0, 0, theme::baseWidth, theme::baseHeight);
-        cameraView.setBounds (layout::camera);
-        setupPanel.setBounds (layout::camera);
+        cameraView.setBounds (camera);
+        setupPanel.setBounds (camera);
         stack.setBounds (layout::stack);
         gear.setBounds (layout::gear);
+        presetButton.setBounds (preset);
 
-        // Image -> wavetable, voice + LFO, filter / output (+ level meter), envelope.
-        Knob* grid[4][5] { { &position, &lines, &spread, &tone, &contrast },
-                           { &unison, &detune, &sub, &lfoRate, &lfoAmount },
-                           { &cutoff, &resonance, &filterEnv, &output, nullptr },
-                           { &attack, &decay, &sustain, &release, nullptr } };
+        secWavetable.setBounds (wavetable);
+        secVoice.setBounds (voice);
+        secFilter.setBounds (filter);
+        secLfo.setBounds (lfo);
+        secEnvelope.setBounds (envelope);
+        secFx.setBounds (fx);
+        secOutput.setBounds (layout::output);
 
-        presetButton.setBounds (layout::preset);
+        harmonicsView.setBounds (displayIn (wavetable));
+        unisonView.setBounds (displayIn (voice));
+        filterView.setBounds (displayIn (filter));
+        lfoView.setBounds (displayIn (lfo));
+        envelopeView.setBounds (displayIn (envelope));
+        fxView.setBounds (displayIn (fx));
 
-        for (int r = 0; r < 4; ++r)
-            for (int c = 0; c < 5; ++c)
-                if (auto* k = grid[r][c])
-                    k->setBounds (layout::columns[c] - Knob::width / 2, layout::rows[r] - Knob::knobSize / 2,
-                                  Knob::width, Knob::height);
+        freeze.setBounds (headerButtons (wavetable, 62));
+        scanMode.setBounds (headerButtons (wavetable, 84, 78));
+        mono.setBounds (headerButtons (voice, 50));
+        filterType.setBounds (headerButtons (filter, 90));
+        filterSlope.setBounds (headerButtons (filter, 56, 108));
+        lfoSync.setBounds (headerButtons (lfo, 50));
 
-        meter.setBounds (juce::Rectangle<int> (layout::meterW, layout::meterH)
-                             .withCentre ({ layout::columns[4], layout::rows[2] }));
+        // Wavetable: Position big, the shaping controls small.
+        place (position, wavetable, 40);
+        place (lines,    wavetable, 98);
+        place (spread,   wavetable, 143);
+        place (tone,     wavetable, 188);
+        place (contrast, wavetable, 238);
+        place (motion,   wavetable, 294);
+
+        place (unison, voice, 52);
+        place (detune, voice, 128);
+        place (sub,    voice, 204);
+        place (glide,  voice, 280);
+
+        place (cutoff,    filter, 44);
+        place (resonance, filter, 118);
+        place (filterEnv, filter, 186);
+        place (drive,     filter, 248);
+        place (velFilter, filter, 300);
+
+        place (lfoRate,   lfo, 110);
+        place (lfoAmount, lfo, 220);
+
+        place (attack,  envelope, 52);
+        place (decay,   envelope, 128);
+        place (sustain, envelope, 204);
+        place (release, envelope, 280);
+
+        place (chorus,        fx, 34);
+        place (delay,         fx, 86);
+        place (delayTime,     fx, 138);
+        place (delayFeedback, fx, 190);
+        place (reverb,        fx, 242);
+        place (reverbSize,    fx, 294);
+
+        // Output: next to the wavetable stack.
+        output.placeAt (layout::output.getX() + 40, layout::output.getY() + 132 - output.getDiameter() / 2);
+        meter.setBounds (layout::output.getRight() - 24, layout::output.getY() + titleH + 2, 6,
+                         layout::output.getHeight() - titleH - 14);
     }
 
     void AxSynthEditor::resized()
@@ -233,7 +327,8 @@ namespace axsynth
         lastRefreshMs = now;
 
         const float pos = processor.getEffectivePosition();
-        cameraView.update (pos);
+        cameraView.update (pos, juce::roundToInt (processor.getState().getRawParameterValue (params::lines)->load()),
+                           processor.getState().getRawParameterValue (params::spread)->load());
         stack.update (pos);
         meter.push (processor.takeOutputPeak(), dt);
 
@@ -242,7 +337,37 @@ namespace axsynth
         if (presetButton.getButtonText() != presetName)
             presetButton.setButtonText (presetName);
 
+        // Live displays.
+        auto& st = processor.getState();
+        auto val = [&st] (const char* id) { return st.getRawParameterValue (id)->load(); };
+        const auto ui = processor.getUiState();
+
+        processor.getEngine().getDisplayHarmonics (harmonicsScratch);
+        {
+            const float fp = juce::jlimit (0.0f, 1.0f, pos) * (float) (numFrames - 1);
+            const int f0 = juce::jlimit (0, numFrames - 1, (int) fp);
+            const int f1 = juce::jmin (f0 + 1, numFrames - 1);
+            const float t = fp - (float) f0;
+            std::array<float, numHarmonics> amps {};
+            for (size_t k = 0; k < amps.size(); ++k)
+                amps[k] = harmonicsScratch[(size_t) f0][k] + t * (harmonicsScratch[(size_t) f1][k] - harmonicsScratch[(size_t) f0][k]);
+            harmonicsView.setHarmonics (amps);
+        }
+        unisonView.setVoice (juce::roundToInt (val (params::unison)), val (params::detune), val (params::sub));
+        filterView.setFilter (juce::roundToInt (val (params::filterType)), val (params::cutoff), ui.cutoffHz, val (params::resonance),
+                              val (params::filterSlope) > 0.5f);
+        envelopeView.setEnvelope (val (params::attack), val (params::decay), val (params::sustain), val (params::release),
+                                  ui.envLevel, ui.envStage, ui.envReleaseFrom);
+        {
+            const int div = juce::jlimit (0, params::delayTimeNames.size() - 1, juce::roundToInt (val (params::delayTime)));
+            fxView.setFx (val (params::chorusMix), val (params::delayMix), (float) params::delayTimeQuarters[div] / 4.0f,
+                          val (params::delayFeedback), val (params::reverbMix), val (params::reverbSize));
+        }
+        cameraView.setHorizontal (val (params::scanMode) > 0.5f);
+
         const bool sync = *processor.getState().getRawParameterValue (params::lfoSync) > 0.5f;
+        lfoView.setLfo (ui.lfoPhase, val (params::lfoAmount), sync,
+                        params::syncNames[juce::jlimit (0, params::syncNames.size() - 1, juce::roundToInt (val (params::lfoRateSync)))]);
         lfoRate.bindTo (sync ? params::lfoRateSync : params::lfoRate);
 
         if (setupPanel.isVisible())

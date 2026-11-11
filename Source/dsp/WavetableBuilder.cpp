@@ -21,7 +21,7 @@ namespace axsynth::builder
         }
     }
 
-    void extractLuminance (const juce::Image& image, juce::Rectangle<float> normRect, HarmonicMatrix& lumOut)
+    void extractLuminance (const juce::Image& image, juce::Rectangle<float> normRect, HarmonicMatrix& lumOut, bool horizontal)
     {
         if (! image.isValid())
         {
@@ -36,20 +36,36 @@ namespace axsynth::builder
         const float x0 = normRect.getX() * iw, w = normRect.getWidth() * iw;
         const float y0 = normRect.getY() * ih, h = normRect.getHeight() * ih;
 
+        // Line position runs across the rect, bands along the line (log spaced).
+        const float lineStart = horizontal ? y0 : x0, lineSpan = horizontal ? h : w;
+        const float bandStart = horizontal ? x0 : y0, bandSpan = horizontal ? w : h;
+
+        // Each line averages across its whole strip (not one pixel column): camera noise
+        // would otherwise make the harmonics flutter.
+        const float strip = lineSpan / (float) numFrames;
+        const int across = juce::jlimit (1, 6, (int) std::ceil (strip * 0.5f));
+
         for (int i = 0; i < numFrames; ++i)
         {
-            const float x = scanlineX (i, x0, w);
+            const float lineCentre = scanlineX (i, lineStart, lineSpan);
 
             for (int s = 0; s < numHarmonics; ++s)
             {
-                const float ya = y0 + bandEdge (s) * h;
-                const float bandH = (bandEdge (s + 1) - bandEdge (s)) * h;
-                const int samples = juce::jlimit (1, 64, (int) std::ceil (bandH));
+                const float a = bandStart + bandEdge (s) * bandSpan;
+                const float len = (bandEdge (s + 1) - bandEdge (s)) * bandSpan;
+                const int samples = juce::jlimit (1, 64, (int) std::ceil (len));
                 float sum = 0.0f;
                 for (int k = 0; k < samples; ++k)
-                    sum += sampleLuma (bd, x, ya + ((float) k + 0.5f) * bandH / (float) samples);
+                {
+                    const float along = a + ((float) k + 0.5f) * len / (float) samples;
+                    for (int c = 0; c < across; ++c)
+                    {
+                        const float line = lineCentre + strip * (((float) c + 0.5f) / (float) across - 0.5f);
+                        sum += horizontal ? sampleLuma (bd, along, line) : sampleLuma (bd, line, along);
+                    }
+                }
 
-                lumOut[(size_t) i][(size_t) s] = juce::jlimit (0.0f, 1.0f, sum / (float) samples);
+                lumOut[(size_t) i][(size_t) s] = juce::jlimit (0.0f, 1.0f, sum / (float) (samples * across));
             }
         }
     }
@@ -104,14 +120,25 @@ namespace axsynth::builder
 
     // ---------------------------------------------------------------------
 
-    static constexpr int fftOrder = 11;
-    static_assert ((1 << fftOrder) == tableSize);
+    namespace
+    {
+        int orderOf (int size) noexcept { int o = 0; while ((1 << o) < size) ++o; return o; }
+    }
 
-    Renderer::Renderer() : fft (fftOrder), work ((size_t) tableSize * 2, 0.0f) {}
+    Renderer::Renderer() : work ((size_t) tableSize * 2, 0.0f)
+    {
+        for (int o = 0; o <= orderOf (tableSize); ++o)
+            ffts.push_back (std::make_unique<juce::dsp::FFT> (o));
+    }
 
     void Renderer::render (const HarmonicMatrix& amps, Wavetable& out)
     {
         for (int f = 0; f < numFrames; ++f)
+            renderFrame (amps, out, f);
+    }
+
+    void Renderer::renderFrame (const HarmonicMatrix& amps, Wavetable& out, int f)
+    {
         {
             // One scale per frame across all mips: removing harmonics can raise the
             // peak, and clipping a mip would put back harmonics above its limit.
@@ -119,23 +146,24 @@ namespace axsynth::builder
 
             for (int m = 0; m < numMips; ++m)
             {
-                std::fill (work.begin(), work.end(), 0.0f);
+                const int size = mipSize (m);
+                std::fill (work.begin(), work.begin() + 2 * size, 0.0f);
 
                 // JUCE real-only inverse: interleaved (re, im) for bins 0..N/2.
                 // A sine of amplitude a at bin k <=> im = -a * N / 2.
                 const int nh = harmonicsInMip (m);
                 for (int k = 1; k <= nh; ++k)
-                    work[(size_t) (2 * k + 1)] = -amps[(size_t) f][(size_t) (k - 1)] * (float) tableSize * 0.5f;
+                    work[(size_t) (2 * k + 1)] = -amps[(size_t) f][(size_t) (k - 1)] * (float) size * 0.5f;
 
-                fft.performRealOnlyInverseTransform (work.data());
+                ffts[(size_t) orderOf (size)]->performRealOnlyInverseTransform (work.data());
 
                 float* dst = out.frame (m, f);
                 double mean = 0.0;
-                for (int i = 0; i < tableSize; ++i)
+                for (int i = 0; i < size; ++i)
                     mean += work[(size_t) i];
-                mean /= tableSize;
+                mean /= size;
 
-                for (int i = 0; i < tableSize; ++i)
+                for (int i = 0; i < size; ++i)
                 {
                     dst[i] = work[(size_t) i] - (float) mean;
                     peak = juce::jmax (peak, std::abs (dst[i]));
@@ -145,10 +173,11 @@ namespace axsynth::builder
             const float scale = peak > 1.0e-9f ? 1.0f / peak : 0.0f;
             for (int m = 0; m < numMips; ++m)
             {
+                const int size = mipSize (m);
                 float* dst = out.frame (m, f);
-                for (int i = 0; i < tableSize; ++i)
+                for (int i = 0; i < size; ++i)
                     dst[i] *= scale;
-                dst[tableSize] = dst[0];
+                dst[size] = dst[0];
             }
         }
     }

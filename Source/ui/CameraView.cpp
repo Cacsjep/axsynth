@@ -14,7 +14,7 @@ namespace axsynth
         setOpaque (true);
     }
 
-    void CameraView::update (float effectivePosition)
+    void CameraView::update (float effectivePosition, int lines, float spread)
     {
         bool changed = false;
 
@@ -39,10 +39,17 @@ namespace axsynth
             }
         }
 
-        const int line = juce::jlimit (0, numFrames - 1, juce::roundToInt (effectivePosition * (float) (numFrames - 1)));
-        if (line != activeLine)
+        juce::uint32 mask = 0;
+        lines = juce::jlimit (1, 4, lines);
+        for (int l = 0; l < lines; ++l)
         {
-            activeLine = line;
+            const float offset = lines == 1 ? 0.0f : spread * ((float) l / (float) (lines - 1) - 0.5f);
+            const float p = juce::jlimit (0.0f, 1.0f, effectivePosition + offset);
+            mask |= 1u << juce::jlimit (0, numFrames - 1, juce::roundToInt (p * (float) (numFrames - 1)));
+        }
+        if (mask != activeMask)
+        {
+            activeMask = mask;
             changed = true;
         }
 
@@ -105,20 +112,27 @@ namespace axsynth
             return;
 
         // Scanlines.
+        auto lineRect = [&] (int i, float thickness)
+        {
+            if (horizontal)
+            {
+                const float y = builder::scanlineX (i, r.getY(), r.getHeight());
+                return juce::Rectangle<float> (r.getX(), y - thickness * 0.5f, r.getWidth(), thickness);
+            }
+            const float x = builder::scanlineX (i, r.getX(), r.getWidth());
+            return juce::Rectangle<float> (x - thickness * 0.5f, r.getY(), thickness, r.getHeight());
+        };
         for (int i = 0; i < numFrames; ++i)
         {
-            const float x = builder::scanlineX (i, r.getX(), r.getWidth());
-            if (i == activeLine)
+            if ((activeMask >> i) & 1u)
                 continue;
             g.setColour (juce::Colours::white.withAlpha (0.15f));
-            g.fillRect (juce::Rectangle<float> (x - 0.5f, r.getY(), 1.0f, r.getHeight()));
+            g.fillRect (lineRect (i, 1.0f));
         }
-        if (activeLine >= 0)
-        {
-            const float x = builder::scanlineX (activeLine, r.getX(), r.getWidth());
-            g.setColour (theme::accent);
-            g.fillRect (juce::Rectangle<float> (x - 0.75f, r.getY(), 1.5f, r.getHeight()));
-        }
+        g.setColour (theme::accent);
+        for (int i = 0; i < numFrames; ++i)
+            if ((activeMask >> i) & 1u)
+                g.fillRect (lineRect (i, 1.5f));
 
         // Border + corner handles.
         g.setColour (theme::accent);

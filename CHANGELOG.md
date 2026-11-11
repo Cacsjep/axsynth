@@ -4,6 +4,27 @@ All notable changes to AxSynth are documented here. The format follows [Keep a C
 
 ## [Unreleased]
 
+## [1.4.0]
+
+### Added
+
+- New layout (1280 x 720): controls grouped in Wavetable, Voice, Filter, LFO, Envelope, Effects and Output, three knob sizes, labels right under the knobs (the value shows there while you turn a knob).
+- Live displays: harmonics of the playing frame, unison spread, filter curve (moves with the filter envelope), LFO with its position, ADSR with the position of the last note, delay echoes and reverb tail.
+- Filter types LP, HP and BP with 12 or 24 dB/oct slope; Drive (anti-aliased) and velocity to filter.
+- Motion: only what moves in the image makes sound; a still scene gets quiet. New "Motion" preset.
+- Freeze (hold the current image) and horizontal scan (rows instead of columns).
+- Mono mode with legato and Glide (glide also works in poly).
+- Effects: Chorus, tempo-synced ping-pong Delay, Reverb (new feedback delay network reverb).
+- SYNC button for the LFO; every played line is highlighted on the camera image.
+
+### Changed
+
+- 256 harmonics (was 64) and half-octave band-limited tables: low notes keep their highs, fewer brightness steps between notes.
+- 16 voices (was 8).
+- Lines average across their strip of the image: less camera noise in the sound.
+- More headroom before the output limiter.
+- The wavetable worker only re-renders frames that changed audibly (about 10x less CPU on a still scene).
+
 ## [1.3.0]
 
 ### Added

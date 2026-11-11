@@ -18,16 +18,16 @@ namespace
     }
 
     // Goertzel magnitude of harmonic k in one table period.
-    double harmonicMagnitude (const float* data, int k)
+    double harmonicMagnitude (const float* data, int k, int size = tableSize)
     {
         double re = 0.0, im = 0.0;
-        for (int n = 0; n < tableSize; ++n)
+        for (int n = 0; n < size; ++n)
         {
-            const double a = juce::MathConstants<double>::twoPi * k * n / tableSize;
+            const double a = juce::MathConstants<double>::twoPi * k * n / size;
             re += data[n] * std::cos (a);
             im += data[n] * std::sin (a);
         }
-        return std::sqrt (re * re + im * im) * 2.0 / tableSize;
+        return std::sqrt (re * re + im * im) * 2.0 / size;
     }
 }
 
@@ -68,9 +68,9 @@ public:
             HarmonicMatrix lum {};
             builder::extractLuminance (img, { 0.0f, 0.0f, 1.0f, 1.0f }, lum);
             expectGreaterThan (lum[0][0], 0.95f);            // top of left scanline
-            expectLessThan (lum[0][63], 0.05f);              // bottom of left scanline
+            expectLessThan (lum[0][numHarmonics - 1], 0.05f); // bottom of left scanline
             expectLessThan (lum[31][0], 0.05f);              // top of right scanline
-            expectLessThan (lum[31][63], 0.05f);
+            expectLessThan (lum[31][numHarmonics - 1], 0.05f);
         }
 
         beginTest ("Rect restricts sampling");
@@ -88,12 +88,12 @@ public:
                     expectGreaterThan (v, 0.95f);
         }
 
-        beginTest ("Bands are log spaced: top sixth = fundamental, top half = harmonics 1..8");
+        beginTest ("Bands are log spaced: top seventh = fundamental, top half = the first harmonics");
         {
             expectWithinAbsoluteError (builder::bandEdge (0), 0.0f, 1.0e-6f);
-            expectWithinAbsoluteError (builder::bandEdge (1), std::log (2.0f) / std::log (65.0f), 1.0e-6f);
-            expectWithinAbsoluteError (builder::bandEdge (64), 1.0f, 1.0e-6f);
-            expectLessThan (std::abs (builder::bandEdge (8) - 0.526f), 0.01f);
+            expectWithinAbsoluteError (builder::bandEdge (1), std::log (2.0f) / std::log ((float) numHarmonics + 1.0f), 1.0e-6f);
+            expectWithinAbsoluteError (builder::bandEdge (numHarmonics), 1.0f, 1.0e-6f);
+            expectWithinAbsoluteError (builder::bandEdge (8), std::log (9.0f) / std::log ((float) numHarmonics + 1.0f), 1.0e-6f);
 
             // White stripe over the top 15 % of the image: only the fundamental band is lit.
             juce::Image img (juce::Image::RGB, 320, 400, true);
@@ -123,6 +123,26 @@ public:
             for (auto& f : lum) for (size_t k = 0; k < f.size(); ++k) f[k] = 0.5f + 0.02f * (float) (k % 2);
             builder::stretchContrast (lum, out, 1.0f);
             expectWithinAbsoluteError (out[3][1], 0.02f / 0.15f, 1.0e-4f);
+        }
+
+        beginTest ("Horizontal scan: lines are rows, bands run left to right");
+        {
+            juce::Image img (juce::Image::RGB, 400, 320, true);
+            {
+                juce::Graphics g (img);
+                g.setColour (juce::Colours::white);
+                g.fillRect (0, 0, 60, 320);              // left 15 % white
+            }
+            HarmonicMatrix h {}, v {};
+            builder::extractLuminance (img, { 0.0f, 0.0f, 1.0f, 1.0f }, h, true);
+            builder::extractLuminance (img, { 0.0f, 0.0f, 1.0f, 1.0f }, v, false);
+            for (int row : { 0, 15, 31 })
+            {
+                expectGreaterThan (h[(size_t) row][0], 0.85f);  // every row: fundamental band lit
+                expectLessThan (h[(size_t) row][40], 0.05f);
+            }
+            expectGreaterThan (v[1][30], 0.95f);   // vertical: left columns fully white
+            expectLessThan (v[20][0], 0.05f);      // right columns black
         }
 
         beginTest ("Invalid image gives zeros");
@@ -188,12 +208,24 @@ public:
             expectWithinAbsoluteError (harmonicMagnitude (f0, 3) / h1, 0.5, 0.01);
             expectWithinAbsoluteError (harmonicMagnitude (f0, 41) / h1, 0.25, 0.01);
 
-            const float* f1 = table->frame (1, 3);   // mip 1: up to 32 harmonics
-            expectLessThan (harmonicMagnitude (f1, 41), 1.0e-3);
-            expectGreaterThan (harmonicMagnitude (f1, 3), 0.1);
+            const float* f1 = table->frame (6, 3);   // mip 6: up to 32 harmonics
+            expectEquals (harmonicsInMip (6), 32);
+            expectLessThan (harmonicMagnitude (f1, 41, mipSize (6)), 1.0e-3);
+            expectGreaterThan (harmonicMagnitude (f1, 3, mipSize (6)), 0.1);
 
-            const float* f6 = table->frame (6, 3);   // mip 6: fundamental only
-            expectLessThan (harmonicMagnitude (f6, 3), 1.0e-3);
+            const float* f6 = table->frame (numMips - 1, 3);   // last mip: fundamental only
+            expectLessThan (harmonicMagnitude (f6, 3, mipSize (numMips - 1)), 1.0e-3);
+        }
+
+        beginTest ("Renderer cost (background thread budget)");
+        {
+            HarmonicMatrix amps {};
+            for (auto& fr : amps) for (size_t k = 0; k < fr.size(); ++k) fr[k] = 1.0f / (float) (k + 1);
+            const auto t0 = juce::Time::getMillisecondCounterHiRes();
+            for (int i = 0; i < 5; ++i) renderer.render (amps, *table);
+            const double ms = (juce::Time::getMillisecondCounterHiRes() - t0) / 5.0;
+            std::printf ("  renderer: %.2f ms per wavetable (%.1f %% of one core at 25 updates/s)\n", ms, ms * 25.0 / 10.0);
+            expectLessThan (ms, 30.0);
         }
 
         beginTest ("Lower mips are not clipped when removing harmonics raises the peak");
@@ -204,12 +236,12 @@ public:
             renderer.render (amps, *table);
             float peak = 0.0f;
             for (int m = 0; m < numMips; ++m)
-                for (int i = 0; i <= tableSize; ++i)
+                for (int i = 0; i <= mipSize (m); ++i)
                     peak = juce::jmax (peak, std::abs (table->frame (m, 0)[i]));
             expectWithinAbsoluteError (peak, 1.0f, 1.0e-3f);
-            const float* f6 = table->frame (6, 0);
-            expectLessThan (harmonicMagnitude (f6, 3), 1.0e-4);
-            expectLessThan (harmonicMagnitude (f6, 5), 1.0e-4);
+            const float* f6 = table->frame (numMips - 1, 0);
+            expectLessThan (harmonicMagnitude (f6, 3, mipSize (numMips - 1)), 1.0e-4);
+            expectLessThan (harmonicMagnitude (f6, 5, mipSize (numMips - 1)), 1.0e-4);
         }
 
         beginTest ("Mip selection keeps harmonics below Nyquist");
@@ -229,7 +261,7 @@ public:
                     const int m = builder::mipForFrequency (fHz, sr);
                     expect (harmonicsInMip (m) * fHz < 0.5 * sr, "harmonics above Nyquist");
                 }
-            expectEquals (builder::mipForFrequency (100.0, 48000.0), 0);
+            expectEquals (builder::mipForFrequency (50.0, 48000.0), 0);   // 256 x 50 Hz = 12.8 kHz
             expectEquals (builder::mipForFrequency (30000.0, 48000.0), numMips - 1);
         }
     }
@@ -299,6 +331,37 @@ public:
             reader.advance (48000);
             const float* g = reader.getCurrent()->frame (0, 10);
             expectWithinAbsoluteError (harmonicMagnitude (g, 2) / harmonicMagnitude (g, 1), fullRatio, 0.01);
+        }
+
+        beginTest ("Motion: a still image has no motion, a change has; freeze ignores new images");
+        {
+            WavetableEngine engine (camera);
+            engine.setMotion (1.0f);
+            const auto a = solidImage (320, 180, juce::Colour::greyLevel (0.3f));
+            juce::Image b (juce::Image::RGB, 320, 180, true);
+            {
+                juce::Graphics g (b);
+                g.fillAll (juce::Colour::greyLevel (0.3f));
+                g.setColour (juce::Colours::white);
+                g.fillRect (100, 40, 80, 100);           // "a hand"
+            }
+
+            engine.injectImageForTesting (a); engine.stepForTesting (0.04);
+            engine.injectImageForTesting (a); engine.stepForTesting (0.04);
+            expectLessThan (engine.getMotionLevel(), 0.01f);
+
+            engine.injectImageForTesting (b); engine.stepForTesting (0.04);
+            expectGreaterThan (engine.getMotionLevel(), 0.05f);
+
+            for (int i = 0; i < 50; ++i) engine.stepForTesting (0.04);  // 2 s still: trail decays
+            expectLessThan (engine.getMotionLevel(), 0.01f);
+
+            engine.setFreeze (true);
+            engine.injectImageForTesting (a); engine.stepForTesting (0.04);
+            expect (engine.getDisplayImage().getPixelAt (120, 60).getBrightness() > 0.9f, "frozen image must stay");
+            engine.setFreeze (false);
+            engine.injectImageForTesting (a); engine.stepForTesting (0.04);
+            expect (engine.getDisplayImage().getPixelAt (120, 60).getBrightness() < 0.5f, "unfrozen takes new images");
         }
 
         beginTest ("Crossfade: 20 ms between old and new table");
@@ -567,14 +630,176 @@ public:
             expectGreaterThan (level (1.0f), level (0.0f) * 4.0f); // 120 Hz -> ~3.8 kHz lets 440 Hz through
         }
 
-        beginTest ("8 voices, oldest is stolen");
+        beginTest ("Filter types: LP passes lows, HP passes highs, BP peaks at the cutoff");
+        {
+            const double sr = 48000.0;
+            const float g = (float) std::tan (juce::MathConstants<double>::pi * 1000.0 / sr);
+            const float k = 1.0f / 0.707f;
+            auto gain = [&] (FilterType type, double hz)
+            {
+                Svf f;
+                float pk = 0.0f;
+                for (int n = 0; n < 48000; ++n)
+                {
+                    const float y = f.process ((float) std::sin (juce::MathConstants<double>::twoPi * hz * n / sr), g, k, type);
+                    if (n > 24000) pk = juce::jmax (pk, std::abs (y));
+                }
+                return pk;
+            };
+            expectGreaterThan (gain (FilterType::lowPass, 100.0), 0.95f);
+            expectLessThan (gain (FilterType::lowPass, 10000.0), 0.02f);
+            expectLessThan (gain (FilterType::highPass, 100.0), 0.02f);
+            expectGreaterThan (gain (FilterType::highPass, 10000.0), 0.95f);
+            expectWithinAbsoluteError (gain (FilterType::bandPass, 1000.0), 1.0f, 0.03f);
+            expectLessThan (gain (FilterType::bandPass, 100.0), 0.15f);
+            expectLessThan (gain (FilterType::bandPass, 10000.0), 0.15f);
+
+            // 24 dB: two stages, a second neutral one. Two octaves above the cutoff the
+            // 12 dB filter is near -24 dB, the 24 dB one near -48 dB.
+            auto gain24 = [&] (double hz)
+            {
+                Svf a, b;
+                float pk = 0.0f;
+                for (int n = 0; n < 48000; ++n)
+                {
+                    const float x = (float) std::sin (juce::MathConstants<double>::twoPi * hz * n / sr);
+                    const float y = b.process (a.process (x, g, k, FilterType::lowPass), g, 1.41421356f, FilterType::lowPass);
+                    if (n > 24000) pk = juce::jmax (pk, std::abs (y));
+                }
+                return pk;
+            };
+            const float db12 = juce::Decibels::gainToDecibels (gain (FilterType::lowPass, 4000.0));
+            const float db24 = juce::Decibels::gainToDecibels (gain24 (4000.0));
+            expectLessThan (db24, db12 - 18.0f);
+            expectGreaterThan (gain24 (100.0), 0.95f);
+        }
+
+        beginTest ("Anti-aliasing: driven tanh folds back far less than plain tanh");
+        {
+            // 4.3 kHz sine at 48 kHz, driven hard: odd harmonics above Nyquist fold back
+            // onto frequencies that are not multiples of 4.3 kHz. Measure that energy.
+            const double sr = 48000.0, f0 = 4300.0;
+            constexpr int len = 1 << 15;
+            auto aliasDb = [&] (auto&& shaper)
+            {
+                std::vector<float> y ((size_t) len);
+                for (int n = 0; n < len; ++n)
+                    y[(size_t) n] = shaper ((float) std::sin (juce::MathConstants<double>::twoPi * f0 * n / sr));
+                juce::dsp::FFT fft (15);
+                std::vector<float> buf ((size_t) len * 2, 0.0f);
+                for (int n = 0; n < len; ++n)   // Hann window
+                    buf[(size_t) n] = y[(size_t) n] * (float) (0.5 - 0.5 * std::cos (juce::MathConstants<double>::twoPi * n / len));
+                fft.performFrequencyOnlyForwardTransform (buf.data());
+                double harm = 0.0, alias = 0.0;
+                for (int b = 1; b < len / 2; ++b)
+                {
+                    const double hz = b * sr / len;
+                    const double h = hz / f0;
+                    const double e = (double) buf[(size_t) b] * buf[(size_t) b];
+                    if (std::abs (h - std::round (h)) * f0 < 60.0) harm += e; else alias += e;
+                }
+                return 10.0 * std::log10 (alias / harm);
+            };
+
+            const float g = 10.0f;
+            const double naive = aliasDb ([g] (float x) { return std::tanh (g * x); });
+            sat::TanhAdaa adaa;
+            const double antiAliased = aliasDb ([g, &adaa] (float x) { return adaa.process (g * x); });
+            std::printf ("  drive aliasing: plain tanh %.1f dB, ADAA %.1f dB (relative to the harmonics)\n", naive, antiAliased);
+            expectLessThan (antiAliased, naive - 6.0);
+
+        }
+
+        beginTest ("Glide, mono legato, velocity to filter, drive");
+        {
+            const double sr = 48000.0;
+            BlockControls c {};
+            for (int i = 0; i < BlockControls::maxSamples; ++i)
+            {
+                c.position[i] = 0.0f;
+                c.cutoffHz[i] = 20000.0f;
+                c.filterG[i] = (float) std::tan (juce::MathConstants<double>::pi * 20000.0 / 96000.0);
+                c.filterK[i] = 1.0f / 0.707f;
+            }
+            float l[64], r[64];
+
+            // Glide: starts at the previous note, reaches the target after the glide time.
+            c.glideSec = 0.2f;
+            Voice v;
+            v.prepare (sr);
+            v.noteOn (69, 1.0f, 1, Envelope {}, 57.0);
+            v.render (l, r, 64, c, table.get(), nullptr, 1.0f, 0.0f, 0.0f);
+            expectLessThan (v.getCurrentPitch(), 58.0);
+            for (int i = 0; i < 300; ++i) v.render (l, r, 64, c, table.get(), nullptr, 1.0f, 0.0f, 0.0f); // 0.4 s
+            expectWithinAbsoluteError (v.getCurrentPitch(), 69.0, 0.05);
+            c.glideSec = 0.0f;
+
+            // Mono: one voice, last note priority, falls back to the held note.
+            SynthEngine s;
+            s.prepare (sr);
+            s.setMono (true);
+            s.noteOn (60, 1.0f, Envelope {});
+            s.noteOn (64, 1.0f, Envelope {});
+            expectEquals (s.getNumActiveVoices(), 1);
+            expectEquals (s.getNewestVoice()->getNote(), 64);
+            s.noteOff (64);
+            expectEquals (s.getNewestVoice()->getNote(), 60);
+            expectEquals (s.getNewestVoice()->getStageIndex(), 1);   // still in attack: legato, held
+            s.noteOff (60);
+            expectEquals (s.getNewestVoice()->getStageIndex(), 3);   // release
+
+            // Velocity to filter: with a low cutoff, a hard note is brighter (louder 4th harmonic frame).
+            auto peakWithVelocity = [&] (float vel)
+            {
+                BlockControls d = c;
+                for (int i = 0; i < 64; ++i) { d.position[i] = 3.0f / 31.0f; d.cutoffHz[i] = 200.0f; }
+                d.velocityToFilter = 1.0f;
+                Voice w;
+                w.prepare (sr);
+                w.noteOn (45, vel, 1, Envelope { 0.001f, 1.0f, 1.0f, 1.0f });
+                float pk = 0.0f;
+                for (int b = 0; b < 300; ++b)
+                {
+                    float ll[64] = {}, rr[64] = {};
+                    w.render (ll, rr, 64, d, table.get(), nullptr, 1.0f, 0.0f, 0.0f);
+                    if (b > 150) for (auto x : ll) pk = juce::jmax (pk, std::abs (x));
+                }
+                return pk / (0.2f + 0.8f * vel);   // remove the velocity amplitude scaling
+            };
+            expectGreaterThan (peakWithVelocity (1.0f), peakWithVelocity (0.1f) * 3.0f);
+
+            // Drive: a pure sine gets a 3rd harmonic.
+            auto thirdHarmonic = [&] (float drv)
+            {
+                BlockControls d = c;
+                d.drive = drv;
+                Voice w;
+                w.prepare (sr);
+                w.noteOn (45, 1.0f, 1, Envelope { 0.001f, 1.0f, 1.0f, 1.0f });
+                std::vector<float> ll (48000, 0.0f), rr (48000, 0.0f);
+                for (int i = 0; i < 48000; i += 64)
+                    w.render (ll.data() + i, rr.data() + i, 64, d, table.get(), nullptr, 1.0f, 0.0f, 0.0f);
+                double re3 = 0, im3 = 0, re1 = 0, im1 = 0;
+                for (int n = 24000; n < 48000; ++n)
+                {
+                    const double a1 = juce::MathConstants<double>::twoPi * 110.0 * n / sr, a3 = 3.0 * a1;
+                    re1 += ll[(size_t) n] * std::cos (a1); im1 += ll[(size_t) n] * std::sin (a1);
+                    re3 += ll[(size_t) n] * std::cos (a3); im3 += ll[(size_t) n] * std::sin (a3);
+                }
+                return std::sqrt (re3 * re3 + im3 * im3) / std::sqrt (re1 * re1 + im1 * im1);
+            };
+            expectLessThan (thirdHarmonic (0.0f), 0.01);
+            expectGreaterThan (thirdHarmonic (1.0f), 0.05);
+        }
+
+        beginTest ("16 voices, oldest is stolen");
         {
             SynthEngine s;
             s.prepare (48000.0);
-            for (int n = 0; n < 8; ++n) s.noteOn (60 + n, 1.0f, Envelope {});
-            expectEquals (s.getNumActiveVoices(), 8);
-            s.noteOn (80, 1.0f, Envelope {});
-            expectEquals (s.getNumActiveVoices(), 8);
+            for (int n = 0; n < SynthEngine::numVoices; ++n) s.noteOn (60 + n, 1.0f, Envelope {});
+            expectEquals (s.getNumActiveVoices(), SynthEngine::numVoices);
+            s.noteOn (100, 1.0f, Envelope {});
+            expectEquals (s.getNumActiveVoices(), SynthEngine::numVoices);
             // note 60 (oldest) was stolen: releasing it must not affect anything
             s.noteOff (60);
             WavetableReader reader (engine.getPool());
@@ -583,7 +808,7 @@ public:
             for (auto& p : ctl.position) p = 0.5f;
             float buf[64];
             for (int i = 0; i < 2000; ++i) s.render (buf, scratchR, 64, ctl, reader, 0.0f);
-            expectEquals (s.getNumActiveVoices(), 8);
+            expectEquals (s.getNumActiveVoices(), SynthEngine::numVoices);
             s.allNotesOff();
             for (int i = 0; i < 2000; ++i) s.render (buf, scratchR, 64, ctl, reader, 0.0f);
             expectEquals (s.getNumActiveVoices(), 0);

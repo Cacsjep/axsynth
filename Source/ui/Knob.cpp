@@ -39,6 +39,10 @@ namespace axsynth
         juce::Slider::mouseDoubleClick (e);
     }
 
+    void KnobSlider::mouseEnter (const juce::MouseEvent& e) { juce::Slider::mouseEnter (e); if (auto* p = getParentComponent()) p->repaint(); }
+    void KnobSlider::mouseExit (const juce::MouseEvent& e)  { juce::Slider::mouseExit (e);  if (auto* p = getParentComponent()) p->repaint(); }
+    void KnobSlider::mouseUp (const juce::MouseEvent& e)    { juce::Slider::mouseUp (e);    if (auto* p = getParentComponent()) p->repaint(); }
+
     void KnobSlider::mouseDrag (const juce::MouseEvent& e)
     {
         // Only drag inside a gesture started by Slider::mouseDown (not after Alt+click reset).
@@ -58,52 +62,42 @@ namespace axsynth
         const auto b = getLocalBounds().toFloat();
         const auto c = b.getCentre();
         const float outer = juce::jmin (b.getWidth(), b.getHeight()) * 0.5f;
-        const float arcR = outer - 1.5f;
-        const float bodyR = outer - 6.0f;
+        const float stroke = outer >= 20.0f ? 3.0f : 2.5f;
+        const float arcR = outer - stroke * 0.5f;
+        const float bodyR = outer - stroke * 1.8f;
         const auto prop = (float) valueToProportionOfLength (getValue());
         const float angle = startAngle + prop * (endAngle - startAngle);
 
-        // Body.
         g.setColour (theme::knobBody);
         g.fillEllipse (juce::Rectangle<float> (bodyR * 2.0f, bodyR * 2.0f).withCentre (c));
 
-        // Background arc + value arc.
-        const juce::PathStrokeType stroke (3.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded);
+        const juce::PathStrokeType arcStroke (stroke, juce::PathStrokeType::curved, juce::PathStrokeType::rounded);
         juce::Path bgArc;
         bgArc.addCentredArc (c.x, c.y, arcR, arcR, 0.0f, startAngle, endAngle, true);
         g.setColour (theme::track);
-        g.strokePath (bgArc, stroke);
+        g.strokePath (bgArc, arcStroke);
 
         if (prop > 0.001f)
         {
             juce::Path valArc;
             valArc.addCentredArc (c.x, c.y, arcR, arcR, 0.0f, startAngle, angle, true);
             g.setColour (isEnabled() ? theme::accent : theme::textDim);
-            g.strokePath (valArc, stroke);
+            g.strokePath (valArc, arcStroke);
         }
 
-        const bool showValue = isMouseOverOrDragging() && isEnabled();
-        if (showValue)
-        {
-            g.setColour (theme::text);
-            g.setFont (theme::font (11.0f));
-            g.drawText (getTextFromValue (getValue()), b.withSizeKeepingCentre (b.getWidth() + 24.0f, 14.0f),
-                        juce::Justification::centred, false);
-        }
-        else
-        {
-            // Thin pointer.
-            const auto dir = juce::Point<float> (std::sin (angle), -std::cos (angle));
-            g.setColour (theme::text);
-            g.drawLine ({ c + dir * (bodyR * 0.35f), c + dir * (bodyR - 2.0f) }, 1.5f);
-        }
+        // Thin pointer.
+        const auto dir = juce::Point<float> (std::sin (angle), -std::cos (angle));
+        g.setColour (theme::text);
+        g.drawLine ({ c + dir * (bodyR * 0.3f), c + dir * (bodyR - 1.5f) }, outer >= 20.0f ? 1.5f : 1.2f);
     }
 
     // -------------------------------------------------------------------------
 
-    Knob::Knob (juce::AudioProcessorValueTreeState& s, const juce::String& paramID, const juce::String& l)
-        : state (s), label (l)
+    Knob::Knob (juce::AudioProcessorValueTreeState& s, const juce::String& paramID, const juce::String& l, Size size)
+        : state (s), label (l), diameter (size == Size::big ? 48 : size == Size::normal ? 36 : 28)
     {
+        slider.onValueChange = [this] { if (slider.isMouseOverOrDragging()) repaint(); };
+        setInterceptsMouseClicks (false, true); // neighbouring knobs may overlap; only the dial takes clicks
         setMouseClickGrabsKeyboardFocus (false);
         addAndMakeVisible (slider);
         bindTo (paramID);
@@ -128,12 +122,21 @@ namespace axsynth
 
     void Knob::resized()
     {
-        slider.setBounds ((getWidth() - knobSize) / 2, 0, knobSize, knobSize);
+        slider.setBounds ((getWidth() - diameter) / 2, 0, diameter, diameter);
     }
 
     void Knob::paint (juce::Graphics& g)
     {
-        const float cy = (float) knobSize * 0.5f;
-        theme::drawCapsLabel (g, label, { 0.0f, cy + labelOffset - 8.0f, (float) getWidth(), 16.0f });
+        const auto area = juce::Rectangle<float> (0.0f, (float) (diameter + labelGap), (float) getWidth(), (float) labelHeight);
+        if (slider.isMouseOverOrDragging() && slider.isEnabled())
+        {
+            g.setColour (theme::text);
+            g.setFont (theme::font (11.0f, true));
+            g.drawText (slider.getTextFromValue (slider.getValue()), area, juce::Justification::centred, false);
+        }
+        else
+        {
+            theme::drawCapsLabel (g, label, area);
+        }
     }
 }

@@ -6,15 +6,6 @@ namespace axsynth
 {
     namespace
     {
-        inline float softClip (float x) noexcept
-        {
-            constexpr float knee = 0.9f, room = 0.1f;
-            const float a = std::abs (x);
-            if (a <= knee)
-                return x;
-            return std::copysign (knee + room * std::tanh ((a - knee) / room), x);
-        }
-
         // Parameter read that survives NaN/inf from a corrupt state or host.
         inline float readParam (const std::atomic<float>* p, float lo, float hi, float fallback) noexcept
         {
@@ -46,6 +37,21 @@ namespace axsynth
         pLines       = apvts.getRawParameterValue (params::lines);
         pSpread      = apvts.getRawParameterValue (params::spread);
         pFilterEnv   = apvts.getRawParameterValue (params::filterEnv);
+        pFilterType  = apvts.getRawParameterValue (params::filterType);
+        pMotion      = apvts.getRawParameterValue (params::motion);
+        pFilterSlope = apvts.getRawParameterValue (params::filterSlope);
+        pFreeze      = apvts.getRawParameterValue (params::freeze);
+        pScanMode    = apvts.getRawParameterValue (params::scanMode);
+        pDrive       = apvts.getRawParameterValue (params::drive);
+        pVelFilter   = apvts.getRawParameterValue (params::velFilter);
+        pMono        = apvts.getRawParameterValue (params::mono);
+        pGlide       = apvts.getRawParameterValue (params::glide);
+        pChorusMix   = apvts.getRawParameterValue (params::chorusMix);
+        pDelayMix    = apvts.getRawParameterValue (params::delayMix);
+        pDelayTime   = apvts.getRawParameterValue (params::delayTime);
+        pDelayFeedback = apvts.getRawParameterValue (params::delayFeedback);
+        pReverbMix   = apvts.getRawParameterValue (params::reverbMix);
+        pReverbSize  = apvts.getRawParameterValue (params::reverbSize);
         pUnison      = apvts.getRawParameterValue (params::unison);
         pDetune      = apvts.getRawParameterValue (params::detune);
         pSub         = apvts.getRawParameterValue (params::sub);
@@ -87,6 +93,28 @@ namespace axsynth
         sDetune.reset (sr, smoothSec);    sDetune.setCurrentAndTargetValue (readParam (pDetune, 0.0f, 50.0f, 12.0f));
         sSpread.reset (sr, smoothSec);    sSpread.setCurrentAndTargetValue (readParam (pSpread, 0.0f, 1.0f, 0.25f));
         sFilterEnv.reset (sr, smoothSec); sFilterEnv.setCurrentAndTargetValue (readParam (pFilterEnv, 0.0f, 1.0f, 0.0f));
+
+        // Effects: all memory is allocated here, never in processBlock.
+        chorus.prepare ({ sr, (juce::uint32) BlockControls::maxSamples, 2 });
+        chorus.setRate (0.6f);
+        chorus.setDepth (0.25f);
+        chorus.setCentreDelay (8.0f);
+        chorus.setFeedback (0.0f);
+        chorus.setMix (0.0f);
+        chorus.reset();
+        reverb.prepare (sr);
+        const auto delayLen = (size_t) (2.0 * sr) + 2;
+        delayBufL.assign (delayLen, 0.0f);
+        delayBufR.assign (delayLen, 0.0f);
+        delayWrite = 0;
+        delayDampL = delayDampR = 0.0f;
+        sChorus.reset (sr, 0.05);    sChorus.setCurrentAndTargetValue (readParam (pChorusMix, 0.0f, 1.0f, 0.0f));
+        sDelayMix.reset (sr, 0.05);  sDelayMix.setCurrentAndTargetValue (readParam (pDelayMix, 0.0f, 1.0f, 0.0f));
+        sDelayFb.reset (sr, 0.05);   sDelayFb.setCurrentAndTargetValue (readParam (pDelayFeedback, 0.0f, 0.9f, 0.35f));
+        sReverbMix.reset (sr, 0.05); sReverbMix.setCurrentAndTargetValue (readParam (pReverbMix, 0.0f, 1.0f, 0.0f));
+        sMotionGate.reset (sr, 0.05); sMotionGate.setCurrentAndTargetValue (1.0f);
+        sDelaySamples.reset (sr, 0.2); sDelaySamples.setCurrentAndTargetValue ((float) (0.25 * sr));
+        effectsPrepared = true;
 
         lfoPhase = 0.0;
         pitchBend = 0.0f;
@@ -136,6 +164,27 @@ namespace axsynth
         sSpread.setTargetValue (readParam (pSpread, 0.0f, 1.0f, 0.25f));
         sFilterEnv.setTargetValue (readParam (pFilterEnv, 0.0f, 1.0f, 0.0f));
         controls.unison = juce::jlimit (1, BlockControls::maxUnison, juce::roundToInt (readParam (pUnison, 1.0f, 7.0f, 3.0f)));
+        controls.steepFilter = readParam (pFilterSlope, 0.0f, 1.0f, 0.0f) > 0.5f;
+        controls.drive = readParam (pDrive, 0.0f, 1.0f, 0.0f);
+        controls.velocityToFilter = readParam (pVelFilter, 0.0f, 1.0f, 0.0f);
+        controls.glideSec = readParam (pGlide, 0.0f, 2.0f, 0.0f);
+        synth.setGlide (controls.glideSec);
+        synth.setMono (readParam (pMono, 0.0f, 1.0f, 0.0f) > 0.5f);
+
+        const float motionAmount = readParam (pMotion, 0.0f, 1.0f, 0.0f);
+        engine.setMotion (motionAmount);
+        engine.setFreeze (readParam (pFreeze, 0.0f, 1.0f, 0.0f) > 0.5f);
+        engine.setHorizontalScan (readParam (pScanMode, 0.0f, 1.0f, 0.0f) > 0.5f);
+        // Motion gate: with Motion up, a still scene gets quiet.
+        sMotionGate.setTargetValue (1.0f + motionAmount * (engine.getMotionLevel() - 1.0f));
+
+        sChorus.setTargetValue (readParam (pChorusMix, 0.0f, 1.0f, 0.0f));
+        sDelayMix.setTargetValue (readParam (pDelayMix, 0.0f, 1.0f, 0.0f));
+        sDelayFb.setTargetValue (readParam (pDelayFeedback, 0.0f, 0.9f, 0.35f));
+        sReverbMix.setTargetValue (readParam (pReverbMix, 0.0f, 1.0f, 0.0f));
+        reverbSizeTarget = readParam (pReverbSize, 0.0f, 1.0f, 0.6f);
+
+        controls.filterType = (FilterType) juce::jlimit (0, 2, juce::roundToInt (readParam (pFilterType, 0.0f, 2.0f, 0.0f)));
         controls.lines  = juce::jlimit (1, BlockControls::maxLines, juce::roundToInt (readParam (pLines, 1.0f, 4.0f, 1.0f)));
         engine.setTilt (readParam (pTone, 0.5f, 2.5f, 1.2f));          // relaxed atomic stores
         engine.setContrast (readParam (pContrast, 0.0f, 1.0f, 0.6f));
@@ -182,6 +231,11 @@ namespace axsynth
             }
         }
         lfoSamplesPerQuarter = sampleRate * 60.0 / bpm;
+        {
+            const int dt = juce::jlimit (0, params::delayTimeNames.size() - 1, juce::roundToInt (readParam (pDelayTime, 0.0f, 5.0f, 1.0f)));
+            const double samples = juce::jlimit (1.0, 2.0 * sampleRate, lfoSamplesPerQuarter * params::delayTimeQuarters[dt]);
+            sDelaySamples.setTargetValue ((float) samples);
+        }
 
         auto* const* channels = buffer.getArrayOfWritePointers();
         int pos = 0;
@@ -241,17 +295,43 @@ namespace axsynth
         sFilterEnv.skip (n - 1);
         controls.filterEnvAmount = sFilterEnv.getNextValue();
         effectivePosition.store (posEff, std::memory_order_relaxed);
+        uiLfoPhase.store ((float) lfoPhase, std::memory_order_relaxed);
 
         float left[BlockControls::maxSamples], right[BlockControls::maxSamples];
         synth.render (left, right, n, controls, reader, pitchBend * 2.0f);
         reader.advance (n);
 
+        if (const auto* v = synth.getNewestVoice())
+        {
+            uiEnvLevel.store (v->getEnvelopeLevel(), std::memory_order_relaxed);
+            uiEnvStage.store (v->getStageIndex(), std::memory_order_relaxed);
+            uiEnvReleaseFrom.store (v->getReleaseFrom(), std::memory_order_relaxed);
+            uiCutoff.store (juce::jmin ((float) (0.45 * sampleRate),
+                                        controls.cutoffHz[n - 1] * std::exp2 (5.0f * controls.filterEnvAmount * v->getEnvelopeLevel())),
+                            std::memory_order_relaxed);
+        }
+        else
+        {
+            uiEnvLevel.store (0.0f, std::memory_order_relaxed);
+            uiEnvStage.store (0, std::memory_order_relaxed);
+            uiCutoff.store (controls.cutoffHz[n - 1], std::memory_order_relaxed);
+        }
+
+        for (int i = 0; i < n; ++i)
+        {
+            const float gate = sMotionGate.getNextValue();
+            left[i] *= gate;
+            right[i] *= gate;
+        }
+
+        processEffects (left, right, n);
+
         float peak = outputPeak.load (std::memory_order_relaxed);
         for (int i = 0; i < n; ++i)
         {
             const float g = sGain.getNextValue();
-            left[i]  = softClip (left[i] * g);
-            right[i] = softClip (right[i] * g);
+            left[i]  = sat::softClip (left[i] * g);   // safety limiter; rarely reached with the headroom
+            right[i] = sat::softClip (right[i] * g);
             peak = juce::jmax (peak, std::abs (left[i]), std::abs (right[i]));
         }
         outputPeak.store (peak, std::memory_order_relaxed);
@@ -268,6 +348,61 @@ namespace axsynth
             for (int i = 0; i < n; ++i)
                 channels[0][offset + i] = 0.5f * (left[i] + right[i]);
         }
+    }
+
+    void AxSynthProcessor::processEffects (float* left, float* right, int n) noexcept
+    {
+        if (! effectsPrepared)
+            return;
+
+        // Chorus (JUCE dsp::Chorus, its own dry/wet). Skipped while fully dry.
+        sChorus.skip (n - 1);
+        const float chorusMix = sChorus.getNextValue();
+        if (chorusMix > 1.0e-4f)
+        {
+            chorus.setMix (chorusMix * 0.5f);
+            float* chans[] { left, right };
+            juce::dsp::AudioBlock<float> block (chans, 2, (size_t) n);
+            chorus.process (juce::dsp::ProcessContextReplacing<float> (block));
+        }
+
+        // Delay: tempo-synced, ping-pong feedback with a gentle low-pass, added to the dry.
+        const int len = (int) delayBufL.size();
+        for (int i = 0; i < n; ++i)
+        {
+            const float mix = sDelayMix.getNextValue();
+            const float fb = sDelayFb.getNextValue();
+            const float d = sDelaySamples.getNextValue();
+
+            float readPos = (float) delayWrite - d;
+            while (readPos < 0.0f) readPos += (float) len;
+            const int r0 = (int) readPos;
+            const int r1 = (r0 + 1) % len;
+            const float frac = readPos - (float) r0;
+            const float wl = delayBufL[(size_t) r0] + frac * (delayBufL[(size_t) r1] - delayBufL[(size_t) r0]);
+            const float wr = delayBufR[(size_t) r0] + frac * (delayBufR[(size_t) r1] - delayBufR[(size_t) r0]);
+
+            delayDampL += 0.35f * (wl - delayDampL);
+            delayDampR += 0.35f * (wr - delayDampR);
+
+            // Ping-pong: each side feeds the other.
+            delayBufL[(size_t) delayWrite] = left[i]  * mix + delayDampR * fb;
+            delayBufR[(size_t) delayWrite] = right[i] * mix + delayDampL * fb;
+            delayWrite = (delayWrite + 1) % len;
+
+            left[i]  += wl;
+            right[i] += wr;
+        }
+
+        // Reverb (FDN). Runs while the mix is up or was up last block (tail fades out).
+        sReverbMix.skip (n - 1);
+        const float revMix = sReverbMix.getNextValue();
+        if (revMix > 1.0e-4f || reverbMixTarget > 1.0e-4f)
+        {
+            reverb.setParameters (reverbSizeTarget, 0.4f);
+            reverb.process (left, right, n, revMix);
+        }
+        reverbMixTarget = revMix;
     }
 
     // ---- state --------------------------------------------------------------

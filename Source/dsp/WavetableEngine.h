@@ -29,6 +29,16 @@ namespace axsynth
         void setTilt (float t) noexcept { tilt.store (t, std::memory_order_relaxed); }
         // Contrast stretch amount 0..1 (see builder::stretchContrast). Any thread.
         void setContrast (float c) noexcept { contrast.store (c, std::memory_order_relaxed); }
+        // Motion 0..1: blend from the image to what changed in it (frame difference with a
+        // short trail). getMotionLevel() is how much is moving, 0..1, for the output gate.
+        void setMotion (float m) noexcept { motion.store (m, std::memory_order_relaxed); }
+        float getMotionLevel() const noexcept { return motionLevel.load (std::memory_order_relaxed); }
+        // Freeze: ignore new camera frames and keep the current image.
+        void setFreeze (bool f) noexcept { freeze.store (f, std::memory_order_relaxed); }
+        // Scan direction: false = columns (vertical lines), true = rows.
+        void setHorizontalScan (bool h) noexcept { horizontalScan.store (h, std::memory_order_relaxed); }
+
+        static constexpr double motionTrailSeconds = 0.35;
 
         // UI accessors (message thread).
         juce::Image getDisplayImage() const;
@@ -42,18 +52,46 @@ namespace axsynth
 
         WavetablePool& getPool() noexcept { return pool; }
 
+        // Current (smoothed) harmonic amplitudes of all frames, for the UI.
+        void getDisplayHarmonics (HarmonicMatrix& out) const;
+        // Frames rendered so far (diagnostics: how much work the worker does).
+        juce::uint64 getFramesRendered() const noexcept { return framesRendered.load (std::memory_order_relaxed); }
+
         static constexpr double smoothingSeconds = 0.150;
 
     private:
         void run() override;
         void step (double dtSeconds);
-        void publish();
+        void publish (float threshold = 0.0f);
 
         CameraConnector& camera;
         WavetablePool pool;
-        builder::Renderer renderer;
+        // The 32 x 256 matrices (~32 KB each) live on the heap, so an engine (or a plugin
+        // instance) never needs a large stack.
+        struct Matrices
+        {
+            HarmonicMatrix target {}, current {}, lum {}, stretched {}, previousLum {}, motionAcc {},
+                           blended {}, rendered {}, displayHarmonics {};
+        };
+        std::unique_ptr<Matrices> mats { std::make_unique<Matrices>() };
+        HarmonicMatrix& target = mats->target;
+        HarmonicMatrix& current = mats->current;
+        HarmonicMatrix& lum = mats->lum;
+        HarmonicMatrix& stretched = mats->stretched;
+        HarmonicMatrix& previousLum = mats->previousLum;
+        HarmonicMatrix& motionAcc = mats->motionAcc;
+        HarmonicMatrix& blended = mats->blended;
+        HarmonicMatrix& rendered = mats->rendered;
+        HarmonicMatrix& displayHarmonics = mats->displayHarmonics;
 
-        HarmonicMatrix target {}, current {}, lum {};
+        builder::Renderer renderer;
+        // Frames are rendered into 'master' only when their harmonics changed audibly
+        // since the last render; the pool buffer then gets a copy of the whole master.
+        Wavetable master;
+        bool masterValid = false;
+        std::atomic<juce::uint64> framesRendered { 0 };
+        static constexpr float renderThreshold = 0.02f; // of the frame's strongest harmonic (~0.17 dB)
+
         bool hasTarget = false, converged = true;
         juce::Image lastImage;
         juce::uint32 lastRectVersion = 0;
@@ -65,7 +103,9 @@ namespace axsynth
         float lastTilt = builder::defaultTilt;
         std::atomic<float> contrast { 0.0f };
         float lastContrast = 0.0f;
-        HarmonicMatrix stretched {};
+        std::atomic<float> motion { 0.0f }, motionLevel { 0.0f };
+        std::atomic<bool> freeze { false }, horizontalScan { false };
+        bool lastHorizontal = false, havePrevious = false;
 
         mutable juce::SpinLock displayLock;
         juce::Image displayImage;

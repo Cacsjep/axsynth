@@ -93,6 +93,11 @@ int main()
     proc.getState().getParameter (axsynth::params::spread)->setValueNotifyingHost (0.5f);
     proc.getState().getParameter (axsynth::params::filterEnv)->setValueNotifyingHost (0.6f);
     proc.getState().getParameter (axsynth::params::contrast)->setValueNotifyingHost (0.9f);
+    // Everything else on: motion, drive, velocity, glide, all effects.
+    for (auto* id : { axsynth::params::motion, axsynth::params::drive, axsynth::params::velFilter,
+                      axsynth::params::chorusMix, axsynth::params::delayMix, axsynth::params::reverbMix })
+        proc.getState().getParameter (id)->setValueNotifyingHost (0.7f);
+    proc.getState().getParameter (axsynth::params::glide)->setValueNotifyingHost (0.3f);
 
     MockPlayHead playHead;
     proc.setPlayHead (&playHead);
@@ -126,6 +131,16 @@ int main()
         // Second half: host-synced LFO, cycling through note and bar divisions.
         if (b == numBlocks / 2)
             proc.getState().getParameter (axsynth::params::lfoSync)->setValueNotifyingHost (1.0f);
+        if (b % 1500 == 0)   // mono on/off, scan direction, freeze
+        {
+            proc.getState().getParameter (axsynth::params::mono)->setValueNotifyingHost ((float) ((b / 1500) % 2));
+            proc.getState().getParameter (axsynth::params::scanMode)->setValueNotifyingHost ((float) ((b / 3000) % 2));
+            proc.getState().getParameter (axsynth::params::freeze)->setValueNotifyingHost ((float) ((b / 4500) % 2));
+        }
+        if (b % 700 == 0)
+            proc.getState().getParameter (axsynth::params::filterType)->setValueNotifyingHost ((float) ((b / 700) % 3) / 2.0f);
+        if (b % 900 == 0)
+            proc.getState().getParameter (axsynth::params::filterSlope)->setValueNotifyingHost ((float) ((b / 900) % 2));
         if (b >= numBlocks / 2 && b % 500 == 0)
             proc.getState().getParameter (axsynth::params::lfoRateSync)->setValueNotifyingHost ((float) ((b / 500) % 7) / 6.0f);
 

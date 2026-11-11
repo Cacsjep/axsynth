@@ -22,8 +22,8 @@ namespace axsynth
         }
 
         // Top edge (0..1 of the rect height) of the band that drives harmonic k (0-based).
-        // Log spaced like an EQ: the top sixth drives the fundamental, the top half
-        // harmonics 1..8, the bottom half 9..64, so every part of the rect is audible.
+        // Log spaced like an EQ: the top seventh drives the fundamental, the top half
+        // harmonics 1..11, the bottom half 12..128, so every part of the rect is audible.
         inline float bandEdge (int k) noexcept
         {
             return std::log ((float) k + 1.0f) / std::log ((float) numHarmonics + 1.0f);
@@ -31,7 +31,10 @@ namespace axsynth
 
         // Mean luminance of the 64 bands along each of the 32 scanlines.
         // normRect is in 0..1 image coordinates. Band 0 (fundamental) = top.
-        void extractLuminance (const juce::Image& image, juce::Rectangle<float> normRect, HarmonicMatrix& lumOut);
+        // horizontal = true: the 32 lines are rows (top to bottom) and the bands run
+        // left (fundamental) to right instead.
+        void extractLuminance (const juce::Image& image, juce::Rectangle<float> normRect, HarmonicMatrix& lumOut,
+                               bool horizontal = false);
 
         // Auto levels over the whole rect: amount 0 = raw luminance, 1 = darkest -> 0 and
         // brightest -> 1, so small changes (a hand, a shadow) change the sound a lot.
@@ -54,9 +57,11 @@ namespace axsynth
         public:
             Renderer();
             void render (const HarmonicMatrix& amps, Wavetable& out);
+            // Renders one frame (all mips) only.
+            void renderFrame (const HarmonicMatrix& amps, Wavetable& out, int frame);
 
         private:
-            juce::dsp::FFT fft;
+            std::vector<std::unique_ptr<juce::dsp::FFT>> ffts; // index = FFT order
             std::vector<float> work;
         };
     }

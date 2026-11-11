@@ -7,6 +7,7 @@
 #include "WavetableStack.h"
 #include "LevelMeter.h"
 #include "SetupPanel.h"
+#include "Visuals.h"
 
 namespace axsynth
 {
@@ -26,8 +27,9 @@ namespace axsynth
         void paintButton (juce::Graphics&, bool highlighted, bool down) override;
     };
 
-    // Plugin UI (spec section 6). Everything is laid out at 1000 x 620 inside 'content'
-    // and scaled uniformly with the window (fixed aspect ratio).
+    // Plugin UI. Everything is laid out at theme::baseWidth x baseHeight inside 'content'
+    // and scaled uniformly with the window (fixed aspect ratio). Controls are grouped in
+    // sections, each with a live display.
     class AxSynthEditor : public juce::AudioProcessorEditor, private juce::Timer
     {
     public:
@@ -61,9 +63,25 @@ namespace axsynth
         GearButton gear;
         LevelMeter meter;
 
-        Knob position, lines, spread, tone, contrast, unison, detune, sub, lfoRate, lfoAmount,
-             cutoff, resonance, filterEnv, output, attack, decay, sustain, release;
+        SectionPanel secWavetable { "Wavetable" }, secVoice { "Voice" }, secFilter { "Filter" },
+                     secLfo { "LFO" }, secEnvelope { "Envelope" }, secFx { "Effects" }, secOutput { "Output" };
+        HarmonicsView harmonicsView;
+        UnisonView unisonView;
+        FilterView filterView;
+        LfoView lfoView;
+        EnvelopeView envelopeView;
+        FxView fxView;
+
+        Knob position, lines, spread, tone, contrast, motion,
+             unison, detune, sub, glide,
+             cutoff, resonance, filterEnv, drive, velFilter,
+             lfoRate, lfoAmount,
+             attack, decay, sustain, release,
+             chorus, delay, delayTime, delayFeedback, reverb, reverbSize,
+             output;
+        ChoiceButtons filterType, filterSlope, scanMode, freeze, mono, lfoSync;
         PresetButton presetButton;
+        HarmonicMatrix harmonicsScratch {};
 
         double lastRefreshMs = 0.0;
         bool closeSetupOnImage = false;

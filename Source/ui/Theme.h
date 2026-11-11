@@ -5,8 +5,8 @@
 namespace axsynth::theme
 {
     // Base layout size; the editor scales its content uniformly from here.
-    inline constexpr int baseWidth  = 1000;
-    inline constexpr int baseHeight = 620;
+    inline constexpr int baseWidth  = 1280;
+    inline constexpr int baseHeight = 720;
 
     inline const juce::Colour background { 0xff15171a };
     inline const juce::Colour cameraBg   { 0xff101215 };
@@ -26,7 +26,7 @@ namespace axsynth::theme
     inline void drawCapsLabel (juce::Graphics& g, const juce::String& s, juce::Rectangle<float> area,
                                juce::Justification just = juce::Justification::centred)
     {
-        auto f = font (11.0f).withExtraKerningFactor (0.08f);
+        auto f = font (10.0f).withExtraKerningFactor (0.08f);
         g.setFont (f);
         g.setColour (textDim);
         g.drawText (s.toUpperCase(), area, just, false);

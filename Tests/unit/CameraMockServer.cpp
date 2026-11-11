@@ -16,7 +16,10 @@ namespace axsynth::test
         juce::StringPairArray parseDigest (const juce::String& header)
         {
             juce::StringPairArray out;
-            auto p = header.fromFirstOccurrenceOf (" ", false, false).getCharPointer();
+            // Keep the parameter string alive: a CharPointer into a temporary String dangles,
+            // which made the mock reject valid Digest responses at random (freed memory reused).
+            const auto params = header.fromFirstOccurrenceOf (" ", false, false);
+            auto p = params.getCharPointer();
 
             while (! p.isEmpty())
             {

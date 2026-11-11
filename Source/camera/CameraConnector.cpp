@@ -486,9 +486,14 @@ namespace axsynth
         AttemptResult stream (http::Client& client, const CameraSettings& s, const Combo& combo,
                               const juce::String& resolution, const juce::String& contentType, bool& streamed)
         {
-            const auto start = juce::Time::getMillisecondCounter();
-            auto lastFrame = start;
-            bool gotFrame = false;
+            // Both stream deadlines (no image within firstFrameTimeoutMs, no new image within
+            // frameStallTimeoutMs) are enforced by a watchdog thread that closes the stream
+            // request, which makes the blocked read below return at once. WinHTTP's own receive
+            // timeout cannot do this: its timer is coarse and fires anywhere between roughly
+            // 4 s and 9 s for a 5 s setting, so it is raised well beyond both deadlines here.
+            const auto start = juce::Time::getMillisecondCounterHiRes();
+            std::atomic<double> lastFrame { start };
+            std::atomic<bool> gotFrame { false };
             juce::JPEGImageFormat jpeg;
 
             MjpegParser parser (MjpegParser::boundaryFromContentType (contentType),
@@ -511,13 +516,35 @@ namespace axsynth
                 frames.publish();
                 ++owner.frameCount;
                 frameEvent.signal();
-                lastFrame = juce::Time::getMillisecondCounter();
+                lastFrame = juce::Time::getMillisecondCounterHiRes();
 
-                if (! gotFrame)
+                if (! gotFrame.exchange (true))
                 {
-                    gotFrame = true;
                     streamed = true;
                     onStreaming (s, combo, resolution);
+                }
+            });
+
+            client.setReceiveTimeout (frameStallTimeoutMs + 20000);
+
+            std::atomic<bool> ended { false };
+            juce::WaitableEvent endEvent;
+            void* const streamRequest = client.requestHandle();
+
+            std::thread watchdog ([&]
+            {
+                while (! ended.load())
+                {
+                    endEvent.wait (50);
+
+                    const auto now = juce::Time::getMillisecondCounterHiRes();
+                    const bool expired = gotFrame.load() ? now - lastFrame.load() >= frameStallTimeoutMs
+                                                         : now - start >= firstFrameTimeoutMs;
+                    if (expired && ! ended.load())
+                    {
+                        canceller.closeIfRegistered (streamRequest);
+                        return;
+                    }
                 }
             });
 
@@ -530,18 +557,16 @@ namespace axsynth
                     break;
 
                 parser.push (buffer.get(), (size_t) n);
-
-                const auto now = juce::Time::getMillisecondCounter();
-                if (! gotFrame && now - start > (juce::uint32) firstFrameTimeoutMs)
-                    break;
-                if (gotFrame && now - lastFrame > (juce::uint32) frameStallTimeoutMs)
-                    break;
             }
+
+            ended = true;
+            endEvent.signal();
+            watchdog.join();
 
             if (shouldStop())
                 return AttemptResult::cancelled;
 
-            return gotFrame ? AttemptResult::streamedThenLost : AttemptResult::noImage;
+            return gotFrame.load() ? AttemptResult::streamedThenLost : AttemptResult::noImage;
         }
 
         void onStreaming (const CameraSettings& s, const Combo& combo, const juce::String& resolution)

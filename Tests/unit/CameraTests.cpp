@@ -607,7 +607,8 @@ namespace axsynth::test
                 const auto dt = juce::Time::getMillisecondCounter() - t0;
                 expect (cam.getStatus() == Status::failed);
                 expectEquals (cam.getErrorMessage(), errorMessageFor (ConnectFailure::noImage, {}));
-                expect (dt >= 4500 && dt < 9000, "no-image detection took " + juce::String (dt) + " ms");
+                note ("  no-image detection took " + juce::String (dt) + " ms");
+                expect (dt >= 4500 && dt < 7000, "no-image detection took " + juce::String (dt) + " ms");
             }
 
             beginTest ("unreachable (closed port)");

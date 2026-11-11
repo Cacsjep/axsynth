@@ -24,7 +24,7 @@ namespace axsynth
         sustainLevel = juce::jlimit (0.0f, 1.0f, e.sustain);
     }
 
-    void Voice::noteOn (int n, float velocity, juce::uint64 o, const Envelope& e) noexcept
+    void Voice::noteOn (int n, float vel, juce::uint64 o, const Envelope& e, double startNote) noexcept
     {
         if (! active)
         {
@@ -39,20 +39,37 @@ namespace axsynth
             subPhase = 0.0;
             filterL.reset();
             filterR.reset();
+            filter2L.reset();
+            filter2R.reset();
+            driveL.reset();
+            driveR.reset();
         }
         // Stolen or retriggered voices continue from their current level: no click.
         note = n;
         order = o;
-        velocityGain = 0.2f + 0.8f * velocity;
+        velocity = vel;
+        velocityGain = 0.2f + 0.8f * vel;
+        targetPitch = (double) n;
+        currentPitch = startNote >= 0.0 ? startNote : (double) n;
         active = true;
         stage = Stage::attack;
         setEnvelope (e);
     }
 
+    void Voice::glideTo (int n, juce::uint64 o) noexcept
+    {
+        note = n;
+        order = o;
+        targetPitch = (double) n;
+    }
+
     void Voice::noteOff() noexcept
     {
         if (active)
+        {
+            releaseFrom = env;
             stage = Stage::release;
+        }
     }
 
     void Voice::render (float* outL, float* outR, int n, const BlockControls& ctl,
@@ -63,7 +80,14 @@ namespace axsynth
             return;
 
         constexpr int maxU = BlockControls::maxUnison, maxL = BlockControls::maxLines;
-        const double freq = 440.0 * std::pow (2.0, ((double) note - 69.0 + (double) pitchBendSemis) / 12.0);
+
+        // Glide: exponential approach, ~99 % of the way after glideSec.
+        if (ctl.glideSec > 0.0005f)
+            currentPitch += (targetPitch - currentPitch) * (1.0 - std::exp (-4.6 * n / (ctl.glideSec * sampleRate)));
+        else
+            currentPitch = targetPitch;
+
+        const double freq = 440.0 * std::pow (2.0, (currentPitch - 69.0 + (double) pitchBendSemis) / 12.0);
         const double subInc = 0.5 * freq / sampleRate;
 
         // Unison oscillators spread over +-detune and across the stereo field. Lines
@@ -98,8 +122,13 @@ namespace axsynth
 
         // Mip for the highest oscillator, so no unison copy aliases.
         const int mip = builder::mipForFrequency (freq * std::pow (2.0, detune / 1200.0), sampleRate);
+        const int size = mipSize (mip);
         constexpr float subPanGain = 0.70710678f; // centred
         const float envAmount = juce::jlimit (0.0f, 1.0f, ctl.filterEnvAmount);
+        const float velOctaves = 3.0f * juce::jlimit (0.0f, 1.0f, ctl.velocityToFilter) * (2.0f * velocity - 1.0f);
+        const bool modulatedCutoff = envAmount > 0.0f || velOctaves != 0.0f;
+        const float driveGain = 1.0f + 9.0f * juce::jlimit (0.0f, 1.0f, ctl.drive);
+        const float driveNorm = 1.0f / std::tanh (driveGain);
         const double maxCutoff = 0.45 * sampleRate;
 
         for (int i = 0; i < n; ++i)
@@ -139,8 +168,8 @@ namespace axsynth
 
             for (int j = 0; j < count; ++j)
             {
-                const double idx = phases[j] * tableSize;
-                const int i0 = juce::jlimit (0, tableSize - 1, (int) idx);
+                const double idx = phases[j] * size;
+                const int i0 = juce::jlimit (0, size - 1, (int) idx);
                 const float fi = (float) (idx - (double) i0);
 
                 for (int l = 0; l < lines; ++l)
@@ -170,17 +199,33 @@ namespace axsynth
             subPhase += subInc;
             if (subPhase >= 1.0) subPhase -= 1.0;
 
-            // Filter envelope: the same ADSR opens the cutoff by up to 5 octaves.
-            float g = ctl.filterG[i];
-            if (envAmount > 0.0f)
+            // Drive: tanh saturation into the filter, peak level kept.
+            if (driveGain > 1.001f)
             {
-                const double fc = juce::jmin (maxCutoff, (double) ctl.cutoffHz[i] * std::exp2 (5.0 * envAmount * env));
+                left  = driveL.process (left * driveGain) * driveNorm;   // anti-aliased tanh
+                right = driveR.process (right * driveGain) * driveNorm;
+            }
+
+            // Filter envelope (up to 5 octaves) and velocity (+-3 octaves) move the cutoff.
+            float g = ctl.filterG[i];
+            if (modulatedCutoff)
+            {
+                const double fc = juce::jlimit (20.0, maxCutoff, (double) ctl.cutoffHz[i] * std::exp2 (5.0 * envAmount * env + velOctaves));
                 g = (float) std::tan (juce::MathConstants<double>::pi * fc / sampleRate);
             }
 
             const float amp = env * velocityGain;
-            outL[i] += filterL.process (left, g, ctl.filterK[i]) * amp;
-            outR[i] += filterR.process (right, g, ctl.filterK[i]) * amp;
+            float fl = filterL.process (left, g, ctl.filterK[i], ctl.filterType);
+            float fr = filterR.process (right, g, ctl.filterK[i], ctl.filterType);
+            if (ctl.steepFilter)
+            {
+                // Second stage without resonance (Q = 0.707): 24 dB/oct, the peak stays controllable.
+                constexpr float kButterworth = 1.41421356f;
+                fl = filter2L.process (fl, g, kButterworth, ctl.filterType);
+                fr = filter2R.process (fr, g, kButterworth, ctl.filterType);
+            }
+            outL[i] += fl * amp;
+            outR[i] += fr * amp;
         }
     }
 
@@ -196,8 +241,45 @@ namespace axsynth
         for (auto& v : voices) v.kill();
     }
 
+    void SynthEngine::setMono (bool m) noexcept
+    {
+        if (m == mono)
+            return;
+        mono = m;
+        numHeld = 0;
+        allNotesOff();
+    }
+
     void SynthEngine::noteOn (int note, float velocity, const Envelope& e) noexcept
     {
+        const double from = glideSec > 0.0005f ? lastPitch : -1.0;
+        lastPitch = (double) note;
+
+        if (mono)
+        {
+            // Note stack: newest last, no duplicates.
+            for (int i = 0; i < numHeld; ++i)
+                if (held[(size_t) i] == note)
+                {
+                    for (int j = i; j < numHeld - 1; ++j) held[(size_t) j] = held[(size_t) j + 1];
+                    --numHeld;
+                    break;
+                }
+            if (numHeld == (int) held.size())
+            {
+                for (int j = 0; j < numHeld - 1; ++j) held[(size_t) j] = held[(size_t) j + 1];
+                --numHeld;
+            }
+            held[(size_t) numHeld++] = note;
+
+            auto& v = voices[0];
+            if (v.isHeld())
+                v.glideTo (note, ++orderCounter);   // legato: no retrigger
+            else
+                v.noteOn (note, velocity, ++orderCounter, e, from >= 0.0 ? v.getCurrentPitch() : -1.0);
+            return;
+        }
+
         Voice* target = nullptr;
 
         for (auto& v : voices)                      // same note already sounding: retrigger
@@ -214,11 +296,37 @@ namespace axsynth
                 if (v.getOrder() < target->getOrder()) target = &v;
         }
 
-        target->noteOn (note, velocity, ++orderCounter, e);
+        target->noteOn (note, velocity, ++orderCounter, e, from);
     }
 
     void SynthEngine::noteOff (int note) noexcept
     {
+        if (mono)
+        {
+            for (int i = 0; i < numHeld; ++i)
+                if (held[(size_t) i] == note)
+                {
+                    for (int j = i; j < numHeld - 1; ++j) held[(size_t) j] = held[(size_t) j + 1];
+                    --numHeld;
+                    break;
+                }
+
+            auto& v = voices[0];
+            if (v.isHeld() && v.getNote() == note)
+            {
+                if (numHeld > 0)
+                {
+                    lastPitch = (double) held[(size_t) numHeld - 1];
+                    v.glideTo (held[(size_t) numHeld - 1], ++orderCounter); // back to the previous held note
+                }
+                else
+                {
+                    v.noteOff();
+                }
+            }
+            return;
+        }
+
         for (auto& v : voices)
             if (v.isHeld() && v.getNote() == note)
                 v.noteOff();
@@ -252,6 +360,15 @@ namespace axsynth
             outL[i] = tmpL[i] * g;
             outR[i] = tmpR[i] * g;
         }
+    }
+
+    const Voice* SynthEngine::getNewestVoice() const noexcept
+    {
+        const Voice* newest = nullptr;
+        for (auto& v : voices)
+            if (v.isActive() && (newest == nullptr || v.getOrder() > newest->getOrder()))
+                newest = &v;
+        return newest;
     }
 
     int SynthEngine::getNumActiveVoices() const noexcept

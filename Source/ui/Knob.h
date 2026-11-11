@@ -19,6 +19,9 @@ namespace axsynth
         void mouseDown (const juce::MouseEvent&) override;
         void mouseDrag (const juce::MouseEvent&) override;
         void mouseDoubleClick (const juce::MouseEvent&) override;
+        void mouseEnter (const juce::MouseEvent&) override;
+        void mouseExit (const juce::MouseEvent&) override;
+        void mouseUp (const juce::MouseEvent&) override;
         void startedDragging() override  { dragActive = true; }
         void stoppedDragging() override  { dragActive = false; }
 
@@ -32,11 +35,15 @@ namespace axsynth
         bool dragActive = false; // true only inside a host change gesture
     };
 
-    // Knob (48 px) with caps label below, bound to an APVTS parameter.
+    // Knob with a caps label right below, bound to an APVTS parameter. While hovered or
+    // dragged the label shows the value instead.
     class Knob : public juce::Component
     {
     public:
-        Knob (juce::AudioProcessorValueTreeState&, const juce::String& paramID, const juce::String& label);
+        enum class Size { small, normal, big };
+
+        Knob (juce::AudioProcessorValueTreeState&, const juce::String& paramID, const juce::String& label,
+              Size size = Size::normal);
         ~Knob() override;
 
         // Rebinds to another parameter (LFO rate <-> synced note value).
@@ -48,13 +55,19 @@ namespace axsynth
         void paint (juce::Graphics&) override;
         void resized() override;
 
-        static constexpr int knobSize = 48;
-        static constexpr int width = 96, height = 80;
-        static constexpr float labelOffset = 40.0f; // label centre below knob centre
+        int getDiameter() const noexcept { return diameter; }
+        static constexpr int width = 76;          // fits the longest label
+        static constexpr int labelHeight = 13;
+        static constexpr int labelGap = 2;        // between knob and label
+        int getTotalHeight() const noexcept { return diameter + labelGap + labelHeight; }
+
+        // Places the knob so its circle is centred at (cx, cy).
+        void placeAt (int cx, int cy) { setBounds (cx - width / 2, cy - diameter / 2, width, getTotalHeight()); }
 
     private:
         juce::AudioProcessorValueTreeState& state;
         juce::String label, boundID;
+        int diameter = 34;
         KnobSlider slider;
         std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> attachment;
     };

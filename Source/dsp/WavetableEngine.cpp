@@ -54,6 +54,12 @@ namespace axsynth
         out = displayFrames;
     }
 
+    void WavetableEngine::getDisplayHarmonics (HarmonicMatrix& out) const
+    {
+        const juce::SpinLock::ScopedLockType sl (displayLock);
+        out = displayHarmonics;
+    }
+
     void WavetableEngine::injectImageForTesting (const juce::Image& img)
     {
         const juce::SpinLock::ScopedLockType sl (injectLock);
@@ -83,7 +89,8 @@ namespace axsynth
 
     void WavetableEngine::step (double dt)
     {
-        bool newInput = false;
+        bool newInput = false, newImage = false;
+        const bool frozen = freeze.load (std::memory_order_relaxed);
 
         juce::Image img;
         {
@@ -95,18 +102,26 @@ namespace axsynth
             }
         }
 
-        if (img.isValid() || camera.popLatestFrame (img))
+        if (! frozen && (img.isValid() || camera.popLatestFrame (img)))
         {
             lastImage = img;
-            newInput = true;
+            newInput = newImage = true;
             const juce::SpinLock::ScopedLockType sl (displayLock);
             displayImage = img;
         }
 
+        // Rect or scan direction changed: a new view, not motion.
+        bool newView = false;
         const auto rv = rectVersion.load();
-        if (rv != lastRectVersion && lastImage.isValid())
-            newInput = true;
+        if (rv != lastRectVersion) newView = true;
         lastRectVersion = rv;
+
+        const bool horizontal = horizontalScan.load (std::memory_order_relaxed);
+        if (horizontal != lastHorizontal) newView = true;
+        lastHorizontal = horizontal;
+
+        if (newView && lastImage.isValid())
+            newInput = true;
 
         const float t = tilt.load (std::memory_order_relaxed);
         if (std::abs (t - lastTilt) > 1.0e-4f && lastImage.isValid())
@@ -118,10 +133,47 @@ namespace axsynth
             newInput = true;
         lastContrast = con;
 
+        const float mot = juce::jlimit (0.0f, 1.0f, motion.load (std::memory_order_relaxed));
+
+        if ((newImage || newView) && lastImage.isValid())
+        {
+            builder::extractLuminance (lastImage, getRect(), lum, horizontal);
+
+            // Motion: per band frame difference with a noise gate, peak-held into a trail.
+            if (havePrevious && newImage && ! newView)
+            {
+                constexpr float noiseGate = 0.02f, gain = 6.0f;
+                for (size_t f = 0; f < (size_t) numFrames; ++f)
+                    for (size_t k = 0; k < (size_t) numHarmonics; ++k)
+                    {
+                        const float d = juce::jmax (0.0f, std::abs (lum[f][k] - previousLum[f][k]) - noiseGate) * gain;
+                        motionAcc[f][k] = juce::jmax (motionAcc[f][k], juce::jmin (1.0f, d));
+                    }
+            }
+            previousLum = lum;
+            havePrevious = true;
+        }
+
+        // Motion trail decays continuously; the level is the mean over the rect.
+        {
+            const float decay = (float) std::exp (-dt / motionTrailSeconds);
+            double sum = 0.0;
+            for (auto& f : motionAcc)
+                for (auto& v : f) { v *= decay; sum += v; }
+            const float level = juce::jlimit (0.0f, 1.0f, (float) (sum / (numFrames * numHarmonics)) * 8.0f);
+            motionLevel.store (level, std::memory_order_relaxed);
+        }
+
+        if (mot > 0.0f && lastImage.isValid())
+            newInput = true; // the trail changes every step
+
         if (newInput && lastImage.isValid())
         {
-            builder::extractLuminance (lastImage, getRect(), lum);
-            builder::stretchContrast (lum, stretched, con);
+            for (size_t f = 0; f < (size_t) numFrames; ++f)
+                for (size_t k = 0; k < (size_t) numHarmonics; ++k)
+                    blended[f][k] = lum[f][k] + mot * (motionAcc[f][k] - lum[f][k]);
+
+            builder::stretchContrast (blended, stretched, con);
             builder::weightHarmonics (stretched, target, t);
             hasTarget = true;
             converged = false;
@@ -145,32 +197,61 @@ namespace axsynth
         {
             current = target;
             converged = true;
+            publish (0.0f);   // settled: render exactly
+            return;
         }
 
-        publish();
+        publish (renderThreshold);
     }
 
-    void WavetableEngine::publish()
+    void WavetableEngine::publish (float threshold)
     {
+        bool anyRendered = false;
+        for (int f = 0; f < numFrames; ++f)
+        {
+            const auto& now = current[(size_t) f];
+            bool changed = ! masterValid;
+            if (! changed)
+            {
+                float peak = 1.0e-9f;
+                for (auto v : now) peak = juce::jmax (peak, v);
+                const auto& was = rendered[(size_t) f];
+                for (size_t k = 0; k < now.size() && ! changed; ++k)
+                    changed = std::abs (now[k] - was[k]) > threshold * peak;
+            }
+            if (changed)
+            {
+                renderer.renderFrame (current, master, f);
+                rendered[(size_t) f] = now;
+                anyRendered = true;
+                framesRendered.fetch_add (1, std::memory_order_relaxed);
+            }
+        }
+        masterValid = true;
+
+        if (! anyRendered)
+            return; // nothing audible changed
+
         const int idx = pool.acquireForWrite();
         if (idx < 0)
             return;
 
         auto& table = pool.get (idx);
-        renderer.render (current, table);
+        std::copy (master.data.begin(), master.data.end(), table.data.begin());
         pool.publish (idx);
 
         DisplayFrames frames;
         for (int f = 0; f < numFrames; ++f)
         {
-            const float* src = table.frame (0, f);
+            const float* src = master.frame (0, f);
             for (int i = 0; i < displayPoints; ++i)
-                frames[(size_t) f][(size_t) i] = src[i * tableSize / displayPoints];
+                frames[(size_t) f][(size_t) i] = src[i * mipSize (0) / displayPoints];
         }
 
         {
             const juce::SpinLock::ScopedLockType sl (displayLock);
             displayFrames = frames;
+            displayHarmonics = current;
         }
         ++displayVersion;
     }

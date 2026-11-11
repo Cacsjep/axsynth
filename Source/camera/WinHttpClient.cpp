@@ -53,6 +53,21 @@ namespace axsynth::http
         handle = nullptr;
     }
 
+    void Canceller::closeIfRegistered (void* handle)
+    {
+        if (handle == nullptr)
+            return;
+
+        const std::lock_guard<std::mutex> lg (mutex);
+
+        const auto it = std::find (handles.begin(), handles.end(), handle);
+        if (it != handles.end())
+        {
+            handles.erase (it);
+            WinHttpCloseHandle (handle);
+        }
+    }
+
     void Canceller::cancel()
     {
         const std::lock_guard<std::mutex> lg (mutex);
@@ -329,6 +344,15 @@ namespace axsynth::http
         r.outcome = Outcome::ok;
         r.contentType = queryHeaderString (req, WINHTTP_QUERY_CONTENT_TYPE);
         return r;
+    }
+
+    void Client::setReceiveTimeout (int ms)
+    {
+        if (request == nullptr)
+            return;
+
+        DWORD value = (DWORD) juce::jmax (0, ms);
+        WinHttpSetOption (request, WINHTTP_OPTION_RECEIVE_TIMEOUT, &value, sizeof (value));
     }
 
     int Client::read (void* dest, int maxBytes)

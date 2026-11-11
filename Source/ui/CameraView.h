@@ -14,7 +14,8 @@ namespace axsynth
         explicit CameraView (WavetableEngine&);
 
         // Message thread, ~30 Hz. Repaints only when something visible changed.
-        void update (float effectivePosition);
+        // lines / spread: every line that plays is highlighted (same offsets as the voices).
+        void update (float effectivePosition, int lines = 1, float spread = 0.0f);
 
         void paint (juce::Graphics&) override;
         void mouseMove (const juce::MouseEvent&) override;
@@ -27,6 +28,8 @@ namespace axsynth
 
         // Hides the rectangle and scanlines (while the setup panel covers the view).
         void setRectVisible (bool shouldShow);
+        // Scanlines as rows (horizontal scan) instead of columns.
+        void setHorizontal (bool h) { if (h != horizontal) { horizontal = h; repaint(); } }
         bool isRectVisible() const noexcept { return rectVisible; }
         // Number of distinct images seen so far.
         juce::uint64 getImageCount() const noexcept { return imageCount; }
@@ -43,8 +46,9 @@ namespace axsynth
         juce::Image image;
         float imageAspect = 16.0f / 9.0f;
         juce::Rectangle<float> rect;     // normalised
-        int activeLine = -1;
+        juce::uint32 activeMask = 0; // bit i set = line i plays
         bool rectVisible = true;
+        bool horizontal = false;
         juce::uint64 imageCount = 0;
 
         Hit dragHit = Hit::none;
